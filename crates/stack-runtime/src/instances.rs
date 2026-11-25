@@ -17,10 +17,12 @@ use serde::Serialize;
 use crate::effective::{EffectiveEnv, EnvLayers, Layer};
 use crate::engine::{ComposeEngine, DownOptions, EngineStream, Progress, UpOptions};
 use crate::events::{EngineEvent, EventAction, EventFilter};
+use crate::host_source::{HostEndpointError, HostSecretEndpoint, HostValue, mint_token};
 use crate::ports::{BusyPort, probe_host_ports};
 use crate::secrets::{ENV_PROVIDER, SecretError, SecretProviders};
 use crate::source::{Source, SourceCtx, SourceError};
 use crate::status::Health;
+use olai_stack_topology::plan::egress::SECRET_SERVER_SERVICE;
 
 /// The directory under the state directory instances are materialized into.
 pub const INSTANCES_DIR: &str = "instances";
@@ -79,6 +81,16 @@ pub enum InstanceError {
     /// and not in this process's environment.
     #[error("required secrets are not set: {}", .0.join(", "))]
     MissingSecrets(Vec<String>),
+    /// The environment's secret server takes its values from a host endpoint
+    /// (`[selection.egress] source = "host"`), and this runtime has none
+    /// ([`Instances::with_host_endpoint`]).
+    #[error(
+        "this environment's secret server takes its values from a host endpoint, which this launcher doesn't run (the desktop does); set `[selection.egress] source = \"env\"` to start it here"
+    )]
+    NoHostEndpoint,
+    /// Registering the instance with the host endpoint failed.
+    #[error(transparent)]
+    HostEndpoint(#[from] HostEndpointError),
     /// Another instance of the same revision is running (they would share a compose project).
     #[error("instance {running} already runs revision {revision} of this environment")]
     RevisionRunning {
@@ -165,6 +177,18 @@ pub struct Materialized {
     /// The required secrets the plan declares that nothing set (see
     /// [`InstanceError::MissingSecrets`]).
     missing_secrets: Vec<String>,
+    /// With a host source: the secret server's variables, for the endpoint, taken out of
+    /// `launch`.
+    host: Option<HostLaunch>,
+}
+
+/// What a host-source instance registers with the endpoint.
+#[derive(Debug)]
+struct HostLaunch {
+    /// The launch variable for the path token.
+    token_env: String,
+    /// The variables the secret server fetches.
+    vars: BTreeMap<String, HostValue>,
 }
 
 impl Materialized {
@@ -177,6 +201,14 @@ impl Materialized {
     /// the instance fails with them.
     pub fn missing_secrets(&self) -> &[String] {
         &self.missing_secrets
+    }
+
+    /// With a host source, the variables the endpoint serves the secret server (they aren't
+    /// in the launch environment). Empty otherwise.
+    pub fn host_var_names(&self) -> impl Iterator<Item = &str> {
+        self.host
+            .iter()
+            .flat_map(|h| h.vars.keys().map(String::as_str))
     }
 }
 
@@ -205,6 +237,7 @@ pub struct Instances<E> {
     sources: BTreeMap<String, Arc<dyn Source>>,
     probe_ports: bool,
     wait_timeout: Option<Duration>,
+    host_endpoint: Option<Arc<dyn HostSecretEndpoint>>,
 }
 
 /// The compose project of revision `revision` of `env` in `workspace`.
@@ -239,6 +272,7 @@ impl<E: ComposeEngine> Instances<E> {
             sources: BTreeMap::new(),
             probe_ports: true,
             wait_timeout: None,
+            host_endpoint: None,
         }
     }
 
@@ -285,6 +319,13 @@ impl<E: ComposeEngine> Instances<E> {
     pub fn with_source(mut self, source: impl Source + 'static) -> Self {
         self.sources
             .insert(source.name().to_owned(), Arc::new(source));
+        self
+    }
+
+    /// Register instances whose secret server uses the host source with `endpoint`. Without
+    /// one, starting such an instance fails with [`InstanceError::NoHostEndpoint`].
+    pub fn with_host_endpoint(mut self, endpoint: Arc<dyn HostSecretEndpoint>) -> Self {
+        self.host_endpoint = Some(endpoint);
         self
     }
 
@@ -482,13 +523,33 @@ impl<E: ComposeEngine> Instances<E> {
         let mut launch = env.launch_vars();
         launch.extend(launch_env.into_vars());
         let missing_secrets = self.declared_secrets(&plan, &mut launch);
+        let host = host_launch(&plan, &env, &mut launch);
         Ok(Materialized {
             dir,
             plan,
             env,
             launch,
             missing_secrets,
+            host,
         })
+    }
+
+    /// Register a host-source instance with the endpoint under a fresh token, and add the
+    /// token to its launch environment. Nothing for any other instance.
+    async fn register_host(&self, id: &InstanceId, materialized: &mut Materialized) -> Result<()> {
+        let Some(host) = &materialized.host else {
+            return Ok(());
+        };
+        let endpoint = self
+            .host_endpoint
+            .as_ref()
+            .ok_or(InstanceError::NoHostEndpoint)?;
+        let token = mint_token()?;
+        endpoint.register(id, &token, host.vars.clone()).await?;
+        materialized
+            .launch
+            .insert(host.token_env.clone(), token.expose().to_owned());
+        Ok(())
     }
 
     /// Add the secrets the plan's modules declare (names only, see [`Plan::declared_secrets`])
@@ -538,11 +599,14 @@ impl<E: ComposeEngine> Instances<E> {
                 });
             }
         }
-        let materialized = self.materialize(id).await?;
+        let mut materialized = self.materialize(id).await?;
         if !materialized.missing_secrets.is_empty() {
             return Err(InstanceError::MissingSecrets(
                 materialized.missing_secrets.clone(),
             ));
+        }
+        if materialized.host.is_some() && self.host_endpoint.is_none() {
+            return Err(InstanceError::NoHostEndpoint);
         }
         if self.probe_ports {
             let running = self
@@ -559,6 +623,7 @@ impl<E: ComposeEngine> Instances<E> {
                 }
             }
         }
+        self.register_host(id, &mut materialized).await?;
         self.store.set_desired(id, Desired::Running)?;
         let opts = UpOptions {
             wait: true,
@@ -590,7 +655,7 @@ impl<E: ComposeEngine> Instances<E> {
         if !running {
             return Err(InstanceError::NotRunning(id.clone()));
         }
-        let materialized = self.materialize(id).await?;
+        let mut materialized = self.materialize(id).await?;
         let known = materialized.plan.services.values().flatten().any(
             |s| matches!(&s.placement, Placement::Container { service: name } if name == service),
         );
@@ -603,6 +668,11 @@ impl<E: ComposeEngine> Instances<E> {
             return Err(InstanceError::MissingSecrets(
                 materialized.missing_secrets.clone(),
             ));
+        }
+        // A recreated secret server gets a fresh token, and the endpoint drops the old one.
+        // Any other service leaves the running server, and its registration, alone.
+        if service == SECRET_SERVER_SERVICE {
+            self.register_host(id, &mut materialized).await?;
         }
         let opts = UpOptions {
             wait: true,
@@ -636,6 +706,9 @@ impl<E: ComposeEngine> Instances<E> {
             progress: Progress::Quiet,
         };
         self.engine.down(&dir, &opts).await?;
+        if let Some(endpoint) = &self.host_endpoint {
+            endpoint.unregister(id).await;
+        }
         self.store.set_desired(id, Desired::Stopped)?;
         Ok(())
     }
@@ -857,6 +930,38 @@ fn remove_empty_parents(root: &Path, file: &Path) {
         }
         dir = d.parent();
     }
+}
+
+/// With a host source: take the secret server's variables out of `launch`, each with how the
+/// endpoint gets its value. A variable a reference set resolves again there; one the `env`
+/// provider filled in ([`Instances::declared_secrets`]) is read from that provider; anything
+/// else is a fixed value.
+fn host_launch(
+    plan: &Plan,
+    env: &EffectiveEnv,
+    launch: &mut BTreeMap<String, String>,
+) -> Option<HostLaunch> {
+    let egress = plan.egress.as_ref()?;
+    let host = egress.host.as_ref()?;
+    let mut vars = BTreeMap::new();
+    for var in &egress.secrets {
+        let Some(value) = launch.remove(var) else {
+            continue;
+        };
+        let source = match env.secret_ref(var) {
+            Some(r) => HostValue::Ref(r.clone()),
+            None if env.get(var).is_none() => HostValue::Ref(SecretRef {
+                provider: ENV_PROVIDER.into(),
+                key: var.clone(),
+            }),
+            None => HostValue::Fixed(crate::secrets::SecretValue::new(value)),
+        };
+        vars.insert(var.clone(), source);
+    }
+    Some(HostLaunch {
+        token_env: host.token_env.clone(),
+        vars,
+    })
 }
 
 #[cfg(test)]

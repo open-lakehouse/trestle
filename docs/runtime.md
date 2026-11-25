@@ -191,10 +191,10 @@ API key for an outside MCP server, say) follow the rule above, with one
 narrowing: only the environment's `secret-server` service lists them. It hands
 them to the egress Envoy over SDS, through a Unix socket in a volume only that
 Envoy mounts, so they reach no other container and still never land in the
-rendered tree. Rotating one recreates the secret server alone. A host-backed
-source (the keychain, read live) is a later phase. See
-[`egress-gateway.md`](egress-gateway.md) for the design and why the server
-runs inside the environment.
+rendered tree. Rotating one recreates the secret server alone, unless the
+environment uses the host source ([below](#the-host-source)), where a rotation
+reaches the server live. See [`egress-gateway.md`](egress-gateway.md) for the
+design and why the server runs inside the environment.
 
 The runtime needs nothing route-specific for this. The egress module declares
 each route's secret as a required secret (`Plan::declared_secrets`), so it
@@ -217,6 +217,54 @@ stores the new value where `trestle var set --secret` would, then calls
 Envoy's SDS stream drops and reconnects, the new version arrives, and Envoy
 swaps it in without a restart. While the server is down, Envoy keeps the
 value it had.
+
+### The host source
+
+With `[selection.egress] source = "host"`, the later phase of this decision,
+the secret server takes its values from an endpoint on the host instead of its
+launch environment. The values stay out of every container's environment, the
+secret server's included, and a rotation reaches Envoy with no container
+recreated.
+
+- **The plan.** `secret-server.yaml` names the endpoint
+  (`http://host.docker.internal:<host_port>`, default port 7480) and the
+  variable holding the instance's path token, `SECRET_SERVER_HOST_TOKEN`. That
+  token is the only variable the `secret-server` service lists. The service
+  maps `host.docker.internal` to `host-gateway`, so the name resolves on a
+  Linux engine too. The route, SDS and keyring variables stay declared on the
+  egress module, so they resolve and fail `start` as before.
+- **Registration.** The launcher passes `Instances::with_host_endpoint` an
+  `Arc<dyn HostSecretEndpoint>` with two calls, `register(instance, token,
+  vars)` and `unregister(instance)`. On `start`, and on
+  `recreate_service`, the runtime mints a fresh 32-byte token, takes the
+  server's variables out of the launch environment, and registers them. Each
+  goes in as a `HostValue`: the `SecretRef` it resolved from (re-read live, so
+  a rotated keychain entry arrives), or a fixed value when nothing can re-read
+  it. The token alone goes into the launch environment. `stop` (and `remove`)
+  unregisters.
+- **Without an endpoint**, starting such an instance fails with
+  `InstanceError::NoHostEndpoint` before Compose runs. `trestle up` runs none:
+  the CLI stays on the launch-environment source, and the error says to set
+  `source = "env"` to start the environment there.
+- **The endpoint.** `HostEndpoint` (feature `host-endpoint`) is the embeddable
+  implementation the desktop runs in-process. It serves
+  `GET /<token>/secrets/<variable>` from the runtime's `SecretProviders`. Tokens
+  are compared in constant time, and anything unknown gets the same `404`. It
+  long-polls with `ETag` / `If-None-Match` and `?wait=<secs>` (at most 60).
+  `HostEndpoint::notify(instance)` re-reads an instance's providers after a
+  rotation, and the end of each hold re-reads that variable. Bind it where
+  containers reach the host, `Reach::detect()`: the loopback on macOS, Docker
+  Desktop and Colima, or the `docker0` gateway on a Linux engine. Use the
+  plan's port.
+
+The secret server keeps its last values while the endpoint is down, so a
+desktop that quits leaves its instances serving what they had. It fails
+startup, like an unset variable, when the endpoint doesn't serve a variable.
+Tests: sentinels under `FakeEngine` in `tests/egress_instances.rs` (the token
+is the only launch value, and registration and unregistration happen), the
+endpoint's unit tests, and the live test `tests/live_host_source.rs`
+(`--ignored`). In the live test a rotation at the host reaches Envoy with
+neither the egress nor the secret-server container recreated or restarted.
 
 ### Keyrings
 

@@ -10,14 +10,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use olai_stack_runtime::{
-    FakeCall, FakeEngine, Health, InstanceError, Instances, Keyring, SecretError, SecretProvider,
-    SecretProviders, SecretValue,
+    FakeCall, FakeEngine, Health, HostEndpointError, HostSecretEndpoint, HostValue, InstanceError,
+    Instances, Keyring, SecretError, SecretProvider, SecretProviders, SecretValue,
 };
 use olai_stack_state::{Draft, InstanceId, SecretRef, Store, VarSet, VarValue};
 use olai_stack_topology::plan::egress::{EGRESS_SERVICE, SECRET_SERVER_SERVICE};
 use olai_stack_topology::{
     DataModule, DeclaredSecret, EgressRoute, EnvManifest, InjectedCredential, ModuleId, Placement,
-    PlanCtx, Provides, RenderSpec, Role, SdsSecret, Selection, ServiceSpec,
+    PlanCtx, Provides, RenderSpec, Role, SdsSecret, SecretSource, Selection, ServiceSpec,
 };
 
 /// The variable holding the route's credential.
@@ -90,8 +90,14 @@ fn fixture() -> Fixture {
 /// `demo/dev` at revision 1: envoy and rustfs, with one route to an outside upstream that
 /// rustfs calls. Its credential is `ROUTE_KEY`, which nothing sets yet.
 fn egress_instance(f: &Fixture) -> InstanceId {
+    egress_instance_from(f, SecretSource::Env)
+}
+
+/// [`egress_instance`], with the secret server on `source`.
+fn egress_instance_from(f: &Fixture, source: SecretSource) -> InstanceId {
     let ws = f.store.create_workspace("demo", false).unwrap();
     let mut selection = Selection::modules(["envoy", "rustfs"]);
+    selection.egress.source = source;
     selection.egress.routes.push(EgressRoute {
         name: "search".into(),
         function: None,
@@ -502,10 +508,16 @@ fn keyring(versions: &[&[u8; 32]]) -> Keyring {
 
 /// `demo/dev` at revision 1: `keys-app` alone, its keyring set from the `rotating` provider.
 fn keys_instance(f: &Fixture) -> InstanceId {
+    keys_instance_from(f, SecretSource::Env)
+}
+
+/// [`keys_instance`], with the secret server on `source`.
+fn keys_instance_from(f: &Fixture, source: SecretSource) -> InstanceId {
     *f.secret.0.lock().unwrap() = keyring(&[KEY_V1]).to_secret().expose().to_owned();
     let ws = f.store.create_workspace("demo", false).unwrap();
     let mut selection = Selection::modules([KEYS_MODULE]);
     selection.gateway.enabled = false;
+    selection.egress.source = source;
     let mut manifest = EnvManifest::new(selection, PlanCtx::default());
     manifest.catalog.manifests.push(KEYS_MODULE_PATH.into());
     let mut draft = Draft::new(manifest);
@@ -653,4 +665,166 @@ async fn a_keyring_rotation_recreates_the_secret_server_alone() {
     assert_ne!(container_of(&f.engine, SECRET_SERVER_SERVICE), server);
     assert_eq!(container_of(&f.engine, "app"), app);
     assert_no_key_material(&recreated.dir);
+}
+
+// The host source: the secret server's only launch value is a path token, and the variables
+// it serves are registered with the launcher's endpoint instead.
+
+const TOKEN_VAR: &str = olai_stack_topology::plan::egress::HOST_SOURCE_TOKEN_VAR;
+
+/// An endpoint that records what instances register.
+#[derive(Clone, Default)]
+struct Recording(Arc<Mutex<BTreeMap<InstanceId, Registration>>>);
+
+/// One registration: the token and the variables.
+type Registration = (SecretValue, BTreeMap<String, HostValue>);
+
+#[async_trait::async_trait]
+impl HostSecretEndpoint for Recording {
+    async fn register(
+        &self,
+        instance: &InstanceId,
+        token: &SecretValue,
+        vars: BTreeMap<String, HostValue>,
+    ) -> Result<(), HostEndpointError> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(instance.clone(), (token.clone(), vars));
+        Ok(())
+    }
+
+    async fn unregister(&self, instance: &InstanceId) {
+        self.0.lock().unwrap().remove(instance);
+    }
+}
+
+impl Recording {
+    fn of(&self, id: &InstanceId) -> Option<Registration> {
+        self.0.lock().unwrap().get(id).cloned()
+    }
+}
+
+/// A fixture whose runtime has `endpoint`.
+fn host_fixture(endpoint: &Recording) -> Fixture {
+    let mut f = fixture();
+    f.instances = f
+        .instances
+        .with_host_endpoint(Arc::new(endpoint.clone()) as Arc<dyn HostSecretEndpoint>);
+    f
+}
+
+fn rotating(key: &str) -> HostValue {
+    HostValue::Ref(SecretRef {
+        provider: "rotating".into(),
+        key: key.into(),
+    })
+}
+
+#[tokio::test]
+async fn a_host_source_instance_without_an_endpoint_fails_before_compose() {
+    let f = fixture();
+    let id = egress_instance_from(&f, SecretSource::Host);
+    set_route_key(&f, &id);
+    let err = f.instances.start(&id).await.unwrap_err();
+    assert!(matches!(err, InstanceError::NoHostEndpoint), "{err}");
+    assert!(err.to_string().contains("source = \"env\""), "{err}");
+    assert!(f.engine.calls().is_empty(), "{:?}", f.engine.calls());
+    // A missing secret is still reported as one.
+    let f = fixture();
+    let id = egress_instance_from(&f, SecretSource::Host);
+    assert!(matches!(
+        f.instances.start(&id).await.unwrap_err(),
+        InstanceError::MissingSecrets(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_host_source_launches_the_secret_server_with_its_token_alone() {
+    let endpoint = Recording::default();
+    let f = host_fixture(&endpoint);
+    let id = egress_instance_from(&f, SecretSource::Host);
+    set_route_key(&f, &id);
+    let started = f.instances.start(&id).await.unwrap();
+
+    let (token, vars) = endpoint.of(&id).expect("registered");
+    assert_eq!(
+        vars,
+        BTreeMap::from([(ROUTE_KEY.to_string(), rotating("route"))])
+    );
+    assert_eq!(started.host_var_names().collect::<Vec<_>>(), [ROUTE_KEY]);
+    let launched = last_env(&f.engine, false);
+    assert_eq!(
+        launched.get(TOKEN_VAR).map(String::as_str),
+        Some(token.expose())
+    );
+    assert!(!launched.contains_key(ROUTE_KEY));
+    for (key, value) in &launched {
+        assert!(!value.contains(SENTINEL_V1), "{key} holds the route secret");
+    }
+    assert_no_value(&started.dir);
+    let mut files = Vec::new();
+    walk(&started.dir, &mut files);
+    for (path, text) in &files {
+        assert!(!text.contains(token.expose()), "the token in {path}");
+    }
+    // Only the secret server lists the token.
+    let fragment: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(started.dir.join("modules/egress-gateway/compose.yaml")).unwrap(),
+    )
+    .unwrap();
+    for (name, service) in fragment["services"].as_mapping().unwrap() {
+        let text = serde_yaml::to_string(service).unwrap();
+        assert_eq!(
+            text.contains(TOKEN_VAR),
+            name.as_str() == Some(SECRET_SERVER_SERVICE),
+            "{name:?}"
+        );
+        assert!(!text.contains(ROUTE_KEY), "{name:?} names the route secret");
+    }
+
+    // A recreate re-registers under a fresh token.
+    let recreated = f
+        .instances
+        .recreate_service(&id, SECRET_SERVER_SERVICE)
+        .await
+        .unwrap();
+    let (fresh, _) = endpoint.of(&id).unwrap();
+    assert_ne!(fresh, token);
+    assert_eq!(
+        last_env(&f.engine, true).get(TOKEN_VAR).map(String::as_str),
+        Some(fresh.expose())
+    );
+    assert_no_value(&recreated.dir);
+
+    // Recreating another service keeps the server's registration.
+    f.instances.recreate_service(&id, "rustfs").await.unwrap();
+    assert_eq!(endpoint.of(&id).unwrap().0, fresh);
+    assert!(!last_env(&f.engine, true).contains_key(TOKEN_VAR));
+
+    // Stopping unregisters.
+    f.instances.stop(&id, false).await.unwrap();
+    assert!(endpoint.of(&id).is_none());
+}
+
+#[tokio::test]
+async fn a_host_source_registers_keyrings_and_launches_none() {
+    let endpoint = Recording::default();
+    let f = host_fixture(&endpoint);
+    let id = keys_instance_from(&f, SecretSource::Host);
+    let started = f.instances.start(&id).await.unwrap();
+    let (_, vars) = endpoint.of(&id).expect("registered");
+    assert_eq!(
+        vars,
+        BTreeMap::from([(KEYRING_VAR.to_string(), rotating("route"))])
+    );
+    let launched = last_env(&f.engine, false);
+    assert!(!launched.contains_key(KEYRING_VAR));
+    for value in launched.values() {
+        assert!(
+            !value.contains("\"versions\""),
+            "a keyring in the launch env"
+        );
+    }
+    assert_no_key_material(&started.dir);
 }

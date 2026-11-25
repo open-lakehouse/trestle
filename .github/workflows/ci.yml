@@ -55,7 +55,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --all-features -- -D warnings
-      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon,host-endpoint -- -D warnings
       # Shared stores on Postgres are opt-in: lint them explicitly.
       - run: cargo clippy --locked --all-targets -p olai-stack-state --features postgres -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-trestle --features test-engine -- -D warnings
@@ -179,8 +179,8 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-auth HTTP key source and PDP client)
         run: cargo test --locked --lib --tests -p olai-auth --features http,pdp-client
-      - name: Run tests (olai-stack-runtime fake engine and Neon)
-        run: cargo test --locked --lib --tests -p olai-stack-runtime --features testing,neon
+      - name: Run tests (olai-stack-runtime fake engine, Neon and host endpoint)
+        run: cargo test --locked --lib --tests -p olai-stack-runtime --features testing,neon,host-endpoint
       - name: Run tests (trestle CLI on the fake engine)
         run: cargo test --locked --lib --tests -p olai-trestle --features test-engine
       - name: Run tests (olai-vended-store protocol modules)

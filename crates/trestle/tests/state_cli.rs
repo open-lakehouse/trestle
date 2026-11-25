@@ -785,6 +785,54 @@ fn trestle_made_branches_carry_ownership_and_an_expiry() {
     );
 }
 
+/// `trestle up` runs no host endpoint, so an environment whose secret server takes its values
+/// from one fails before Compose, saying how to start it here.
+#[test]
+fn up_refuses_a_host_source_environment() {
+    let home = Home::new();
+    let scenario = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scenario.path().join("env.toml"),
+        r#"version = 9
+
+[selection]
+modules = ["envoy", "rustfs"]
+
+[selection.egress]
+source = "host"
+
+[[selection.egress.routes]]
+name = "search"
+upstream = "https://api.search.example.com"
+consumers = ["rustfs"]
+credential = { kind = "bearer", secret = "SEARCH_API_KEY" }
+"#,
+    )
+    .unwrap();
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&[
+        "env",
+        "create",
+        "demo/dev",
+        "--from",
+        scenario.path().to_str().unwrap(),
+    ]);
+    home.ok(&["env", "commit", "demo/dev"]);
+    let out = home
+        .cmd(&["up", "demo/dev"])
+        .env("SEARCH_API_KEY", "hostSENTINEL")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        err.contains("takes its values from a host endpoint") && err.contains("source = \"env\""),
+        "{err}"
+    );
+    assert!(!err.contains("hostSENTINEL"), "{err}");
+    assert!(home.projects().is_empty());
+}
+
 #[test]
 fn a_missing_required_secret_says_how_to_set_it() {
     let home = Home::new();
