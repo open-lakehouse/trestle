@@ -145,6 +145,8 @@ struct StreamState {
     last_nonce: Option<String>,
     last_version: Option<String>,
     last_sent: Option<BTreeSet<String>>,
+    /// The generation of each value in `last_sent` when it was sent, in the same order.
+    last_generations: Vec<u64>,
 }
 
 impl StreamState {
@@ -184,23 +186,54 @@ impl StreamState {
         if allowed.is_empty() || self.last_sent.as_ref() == Some(&allowed) {
             return None;
         }
+        Some(self.respond(policy, allowed, "sending secrets"))
+    }
 
+    /// After a value changed: a new version of what the stream last sent, if any of it
+    /// changed. A pending (unacknowledged) response is superseded; its nonce goes stale.
+    fn on_change(&mut self, policy: &Policy) -> Option<DiscoveryResponse> {
+        let sent = self.last_sent.clone()?;
+        if generations(policy, &self.caller, &sent) == self.last_generations {
+            return None;
+        }
+        Some(self.respond(policy, sent, "sending changed secrets"))
+    }
+
+    fn respond(
+        &mut self,
+        policy: &Policy,
+        names: BTreeSet<String>,
+        message: &'static str,
+    ) -> DiscoveryResponse {
         self.sequence += 1;
         let version = format!("{}-{}", self.boot_id, self.sequence);
         let nonce = self.sequence.to_string();
-        tracing::info!(consumer, names = ?allowed, %version, "sending secrets");
+        tracing::info!(consumer = self.caller.as_str(), names = ?names, %version, "{message}");
+        // Generations before values: a change in between is sent again on its own wake-up.
+        self.last_generations = generations(policy, &self.caller, &names);
         let response = DiscoveryResponse {
             version_info: version.clone(),
-            resources: resources(policy, &self.caller, &allowed),
+            resources: resources(policy, &self.caller, &names),
             type_url: secret_type_url(),
             nonce: nonce.clone(),
             ..Default::default()
         };
         self.last_nonce = Some(nonce);
         self.last_version = Some(version);
-        self.last_sent = Some(allowed);
-        Some(response)
+        self.last_sent = Some(names);
+        response
     }
+}
+
+fn generations(policy: &Policy, caller: &CallerId, names: &BTreeSet<String>) -> Vec<u64> {
+    names
+        .iter()
+        .map(|name| {
+            policy
+                .cell_of(caller, name)
+                .map_or(0, |cell| cell.generation())
+        })
+        .collect()
 }
 
 #[tonic::async_trait]
@@ -231,9 +264,12 @@ impl<R: CallerResolver> SecretDiscoveryService for SdsService<R> {
             last_nonce: None,
             last_version: None,
             last_sent: None,
+            last_generations: Vec::new(),
         };
         let (tx, rx) = mpsc::channel(4);
         let mut closing = self.closing.subscribe();
+        let mut changes = policy.changes();
+        let mut watching = true;
         tokio::spawn(async move {
             tracing::debug!(consumer = state.caller.as_str(), "secret stream opened");
             loop {
@@ -246,6 +282,16 @@ impl<R: CallerResolver> SecretDiscoveryService for SdsService<R> {
                         tracing::debug!(consumer = state.caller.as_str(), "closing the secret stream: shutting down");
                         let _ = tx.send(Err(Status::unavailable("the secret server is shutting down"))).await;
                         return;
+                    }
+                    changed = changes.changed(), if watching => {
+                        watching = changed.is_ok();
+                        if watching
+                            && let Some(response) = state.on_change(&policy)
+                            && tx.send(Ok(response)).await.is_err()
+                        {
+                            return;
+                        }
+                        continue;
                     }
                     message = inbound.next() => message,
                 };
@@ -316,6 +362,7 @@ mod tests {
             last_nonce: None,
             last_version: None,
             last_sent: None,
+            last_generations: Vec::new(),
         }
     }
 
@@ -398,6 +445,32 @@ mod tests {
         assert!(
             state("a")
                 .on_request(&policy, &request(&[], "", ""))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_changed_value_is_sent_again_with_a_new_version() {
+        let mut policy = Policy::new();
+        let cell = policy.cell(SecretValue::new("v1"));
+        policy.allow_cell(CallerId::new("a"), "planner", cell.clone());
+        policy.allow(CallerId::new("a"), "reviewer", SecretValue::new("r"));
+        let mut s = state("a");
+        // Nothing sent yet: nothing to re-send.
+        assert!(s.on_change(&policy).is_none());
+        let first = s
+            .on_request(&policy, &request(&["planner"], "", ""))
+            .unwrap();
+        assert!(s.on_change(&policy).is_none(), "nothing changed");
+        cell.set(SecretValue::new("v2"));
+        let second = s.on_change(&policy).unwrap();
+        assert_ne!(second.version_info, first.version_info);
+        assert_eq!(second.nonce, "2");
+        assert_eq!(names(&second), ["planner"]);
+        assert!(s.on_change(&policy).is_none(), "already sent");
+        // The ACK of the new nonce is accepted; the old nonce is stale.
+        assert!(
+            s.on_request(&policy, &request(&["planner"], &second.version_info, "2"))
                 .is_none()
         );
     }

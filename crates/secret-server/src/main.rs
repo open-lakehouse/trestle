@@ -1,12 +1,12 @@
 //! `olai-secret-server`: serves SDS on the sockets `secret-server.yaml` lists, with values
-//! from the process environment.
+//! from the process environment or a host endpoint.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-use olai_secret_server::{Config, serve};
+use olai_secret_server::{Config, HostOptions, resolve, serve};
 use tracing_subscriber::EnvFilter;
 
 /// Serve Envoy's secret discovery service on one Unix socket per consumer.
@@ -37,11 +37,19 @@ async fn main() -> ExitCode {
         Ok(config) => config,
         Err(e) => return fail(&e),
     };
-    let policy = match config.resolve(|name| std::env::var_os(name)) {
-        Ok(policy) => policy,
+    let resolved = match resolve(
+        &config,
+        |name| std::env::var_os(name),
+        HostOptions::default(),
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
         Err(e) => return fail(&e),
     };
-    match serve(&config, policy, shutdown_signal()).await {
+    // Follows the host source, if that is the source, until the server stops.
+    let _watching = resolved.watcher.map(|watcher| watcher.spawn());
+    match serve(&config, resolved.policy, shutdown_signal()).await {
         Ok(()) => {
             tracing::info!("shut down");
             ExitCode::SUCCESS

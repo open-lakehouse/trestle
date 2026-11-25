@@ -8,8 +8,9 @@ gateways: it knows listeners, consumers and secret names.
 
 - One Unix socket per consumer. The socket a connection arrives on decides what it may
   see.
-- Values come from the server's process environment, read once at startup. The
-  configuration file only names variables.
+- Values come from a source: the server's process environment, read once at startup, or a
+  host endpoint it follows live ([below](#the-host-source)). The configuration file only
+  names variables.
 - `StreamSecrets` (state of the world) and `FetchSecrets`, `generic_secret` resources
   only. `DeltaSecrets` is not implemented.
 - A key service (`olai.keys.v1.KeyService`, from
@@ -42,6 +43,7 @@ listeners:
 | Field | Meaning |
 |---|---|
 | `version` | Must be `1`. |
+| `source` | Where values come from: absent or `{kind: env}` for the process environment, or `{kind: host, url, token_env}` for a host endpoint ([below](#the-host-source)). |
 | `listeners[].socket` | The Unix socket the server binds for this consumer. Its directory is created if missing, and a socket left by an earlier run is replaced. The socket is mode `0666`: the volume it lives on, not its owner, is what restricts it to one consumer. |
 | `listeners[].consumer` | The consumer every connection on this socket is answered for. Unique across listeners. |
 | `listeners[].secrets[].name` | A resource name the consumer may ask for, such as the `name` in Envoy's `sds_config` secret. Unique within the listener. Two consumers can each have a secret with the same name. |
@@ -62,6 +64,42 @@ doesn't hold, a position in malformed JSON), and never quotes it.
 The binary reads the file from `--config` or `SECRET_SERVER_CONFIG` (default
 `/etc/trestle/secret-server.yaml`), and logs to stderr with `RUST_LOG` filtering (default
 `info`).
+
+## The host source
+
+```yaml
+version: 1
+source:
+  kind: host
+  url: http://host.docker.internal:7480   # the endpoint's base URL (plain http)
+  token_env: SECRET_SERVER_HOST_TOKEN     # the variable that holds the path token
+listeners:
+  # as above
+```
+
+With the host source, the server's environment holds one value: an unguessable path token
+that the host endpoint minted for this instance. Every listed variable comes from the
+endpoint instead:
+
+- **At startup** the server fetches each variable once with
+  `GET <url>/<token>/secrets/<variable>`. A variable the endpoint answers `404` for (an
+  unknown token is a `404` for every variable), or serves empty, fails startup with the
+  same missing-variable listing as the `env` source. While the endpoint can't be reached
+  or answers `5xx`, the server retries for 30 seconds, then exits non-zero.
+- **Afterwards** it long-polls each variable: `GET <url>/<token>/secrets/<variable>?wait=30`
+  with `If-None-Match: <etag>`. The endpoint holds the request until the value changes (a
+  `200` with the new value and `ETag`) or the hold ends (`304`). A change reaches every
+  open `StreamSecrets` stream as a new version, and a changed keyring reaches every
+  `WatchKey` stream. Nothing restarts.
+- **When the endpoint is down later**, or stops serving a variable, the server keeps the
+  last values, logs the failure once (by variable and base URL), and retries with backoff
+  up to 30 seconds.
+
+The token is in the URL path, so the client ignores proxy variables and never logs URLs:
+logs name the base URL and variables, never the token or a value. The endpoint listens on
+the host's loopback (Docker Desktop, OrbStack and Colima forward `host.docker.internal`
+there) or the Docker bridge's gateway on Linux. olai-stack-runtime has an embeddable
+endpoint (feature `host-endpoint`).
 
 ## What a consumer sees
 
@@ -146,7 +184,8 @@ consumers, keys and versions, never a DEK.
 
 ## Rotation
 
-Recreate the server with the new value in its environment, for example
+With the host source, change the value at the endpoint: open streams get it within a
+round trip. With the `env` source, recreate the server with the new value in its environment, for example
 `docker compose up -d --no-deps --force-recreate secret-server`. Envoy's stream drops and
 reconnects, the new version arrives, and Envoy swaps the secret without a restart. While
 the server is down, Envoy keeps the last value it had. olai-http's SDS client
@@ -246,6 +285,12 @@ the image can't pre-own them for another user.
   - refusal below `min_decrypt`;
   - another consumer's socket being refused;
   - the opt-in DEK cache across a server restart.
+
+  The host source tests (`tests/host_source.rs`, `tests/host_source_logs.rs`) run the
+  server against a fake endpoint. They cover a change reaching an open stream without a
+  restart, a host that goes down (the last values stay) and comes back, an unknown path
+  and a missing variable failing startup, an unreachable host, and logs free of the
+  token and values.
 - `cargo test -p olai-secret-server --features emulator-it --tests`: Envoy `v1.40.2` in
   Docker against the server image and an echo upstream. It checks that:
   - the token is injected, replacing the caller's own credentials;
