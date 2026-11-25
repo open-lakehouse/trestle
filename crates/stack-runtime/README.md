@@ -34,6 +34,12 @@ stops and watches it. The `trestle` CLI and the desktop app share it.
   fallback.
 - **`Source`**: overlays of variables, endpoints and expiring credentials from outside
   the store. `UserVars` is built in.
+- **`HostSecretEndpoint`**: what an instance registers with when its secret server takes its
+  values from the host (`[selection.egress] source = "host"`). On start the runtime
+  registers it under a fresh path token, which is the server's only launch value, and on
+  stop it unregisters it. `HostEndpoint` (feature `host-endpoint`) is an embeddable
+  endpoint for a long-running launcher such as the desktop. It serves the values from the
+  runtime's secret providers, and a rotation reaches Envoy with nothing recreated.
 - **`Keyring`**: the versioned keys the secret server's key service seals a module's
   data under, in the JSON form the server reads. Import an existing key as version 1,
   rotate to a new random version, retire old versions by raising `min_decrypt`. All of

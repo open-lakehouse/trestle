@@ -20,6 +20,8 @@ olai-stack-topology = { path = "../stack-topology", version = "0.0.27", features
 
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
+# The host source's endpoint, behind `host-endpoint`.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"], optional = true }
 # Keyrings' key material, as the secret server reads it.
 base64 = { workspace = true }
 # Branch expiry timestamps, behind `neon`.
@@ -68,6 +70,9 @@ keychain = ["dep:keyring"]
 neon = ["dep:chrono", "olai-stack-state/postgres"]
 # `FakeEngine`: an in-memory `ComposeEngine` for tests of code that drives one.
 testing = []
+# `HostEndpoint`: the host side of the secret server's host source, embeddable in a long-running
+# launcher (the desktop).
+host-endpoint = ["dep:axum", "tokio/time"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }

@@ -229,7 +229,11 @@ impl EnvLayers {
         }
         // Secrets last, once every layer has had its say.
         let mut vars = BTreeMap::new();
+        let mut refs = BTreeMap::new();
         for (key, (provenance, value, shadowed)) in winners {
+            if let LayerValue::SecretRef(r) = value {
+                refs.insert(key.clone(), r.clone());
+            }
             let value = match value {
                 LayerValue::Plain(v) if secret_keys.contains(key.as_str()) => {
                     EnvValue::Secret(SecretValue::new(v.clone()))
@@ -247,7 +251,7 @@ impl EnvLayers {
                 },
             );
         }
-        Ok(EffectiveEnv { vars })
+        Ok(EffectiveEnv { vars, refs })
     }
 }
 
@@ -257,6 +261,8 @@ impl EnvLayers {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EffectiveEnv {
     vars: BTreeMap<String, Resolved>,
+    /// The secret reference each variable a reference won resolved from.
+    refs: BTreeMap<String, olai_stack_state::SecretRef>,
 }
 
 /// One row of [`EffectiveEnv::masked`].
@@ -285,6 +291,12 @@ impl EffectiveEnv {
     /// The value of `key`.
     pub fn get(&self, key: &str) -> Option<&EnvValue> {
         self.vars.get(key).map(|r| &r.value)
+    }
+
+    /// The secret reference `key` resolved from, when a reference (a store var's
+    /// [`VarValue::Secret`]) set it: what a live consumer resolves again to follow a rotation.
+    pub fn secret_ref(&self, key: &str) -> Option<&olai_stack_state::SecretRef> {
+        self.refs.get(key)
     }
 
     /// Every variable with secrets masked, for showing.

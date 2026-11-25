@@ -16,6 +16,9 @@
 //!   side by side, with the layered [`EffectiveEnv`] injected and credentials resolved by
 //!   [`SecretProvider`]s ([`EnvProvider`], and `KeychainProvider` behind feature `keychain`) and
 //!   [`Source`] overlays.
+//! - [`HostSecretEndpoint`]: what an instance whose secret server takes its values from the
+//!   host registers with, and `HostEndpoint` (feature `host-endpoint`), an embeddable endpoint
+//!   serving them from [`SecretProviders`].
 //! - [`Keyring`]: a module key's versioned KEKs, as the secret server's key service reads them,
 //!   and the add-only operations on it (import, rotate, retire).
 //! - `neon` (feature `neon`): Neon branches as a source, through the Neon CLI
@@ -47,6 +50,10 @@ mod error;
 mod events;
 #[cfg(feature = "testing")]
 mod fake;
+#[cfg(feature = "host-endpoint")]
+#[cfg_attr(docsrs, doc(cfg(feature = "host-endpoint")))]
+mod host_endpoint;
+mod host_source;
 mod instances;
 mod keyring;
 mod logs;
@@ -71,6 +78,10 @@ pub use events::{
 #[cfg(feature = "testing")]
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use fake::{FakeCall, FakeEngine};
+#[cfg(feature = "host-endpoint")]
+#[cfg_attr(docsrs, doc(cfg(feature = "host-endpoint")))]
+pub use host_endpoint::{HostEndpoint, Listening, MAX_WAIT, Reach};
+pub use host_source::{HostEndpointError, HostSecretEndpoint, HostValue};
 pub use instances::{
     INSTANCES_DIR, InstanceError, InstanceEvent, Instances, Materialized, PLACEMENT_KEYS,
     ReconcileOptions, Reconciled, instance_project, parse_instance_project,

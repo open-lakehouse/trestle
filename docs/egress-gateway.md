@@ -141,6 +141,51 @@ listeners:
 The server is generic: it knows listeners, consumers and names, not what the
 names are for.
 
+### The host source (phase 8)
+
+With `[selection.egress] source = "host"` (and optionally `host_port`,
+default 7480), the server takes its values from an endpoint on the host instead
+of its environment:
+
+```yaml
+version: 1
+source:
+  kind: host
+  url: http://host.docker.internal:7480
+  token_env: SECRET_SERVER_HOST_TOKEN
+listeners:
+  # unchanged
+```
+
+- **The only launch value is the path token**, minted per instance on every
+  start, so `docker inspect` on `secret-server` shows no credential. The
+  service maps `host.docker.internal` to `host-gateway`, so the name holds on a
+  Linux engine as on Docker Desktop, OrbStack and Colima.
+- **At startup** the server fetches every variable once
+  (`GET <url>/<token>/secrets/<variable>`). One the endpoint doesn't serve
+  (`404`, which is also what an unknown token gets) fails startup, as an unset
+  variable does today. An unreachable endpoint is retried for 30 seconds.
+- **Then it long-polls** each variable (`?wait=30`, `If-None-Match`). A changed
+  value goes to every open stream as a new SDS version, and a changed keyring
+  to every `WatchKey` stream. Rotation is live: no container is recreated, and
+  Envoy's side doesn't change.
+- **A host that goes down later** leaves the last values in place. The server
+  retries with backoff, and its logs name the base URL and variables, never the
+  token or a value.
+- **The listener and consumer policy is unchanged.**
+
+The host side lives in `olai-stack-runtime`. An instance whose plan uses the
+host source registers with a `HostSecretEndpoint` the launcher supplies:
+`register(instance, token, vars)` on start, `unregister` on stop. The
+embeddable `HostEndpoint` (feature `host-endpoint`) serves the values from the
+runtime's secret providers. It follows the shape of the desktop's
+metadata-service token endpoint: bound on loopback (or `docker0` on Linux), one
+unguessable path per instance compared in constant time, and a `404` for
+anything unknown. The desktop runs it in-process (S9b). `trestle up` runs none,
+so it refuses a host-source environment before Compose and stays on the `env`
+source. A CLI daemon could embed the same endpoint later. See
+[`runtime.md`](runtime.md#the-host-source).
+
 ## Decision: phase 1 delivers egress secrets to an in-environment secret server
 
 Two places could hold the values the server hands out: the host's keychain,
@@ -163,12 +208,13 @@ environment rather than in every consumer's.
 
 The server stays in the environment in later phases too. What changes is
 **where it gets its values**: a host-backed source, desktop first, that the
-in-environment server pulls from. That works like the desktop's metadata-service
-token endpoint in luminescent-lakehouse: bound on loopback or the Docker
-bridge, reached at `host.docker.internal`, behind an unguessable per-instance
-path that is the only launch value. Rotation is then live, and Envoy's side
-does not change. Whether the CLI gets the same source depends on whether a
-host daemon turns out to be worth having for anything else.
+in-environment server pulls from ([phase 8](#the-host-source-phase-8),
+implemented). That works like the desktop's metadata-service token endpoint in
+luminescent-lakehouse: bound on loopback or the Docker bridge, reached at
+`host.docker.internal`, behind an unguessable per-instance path that is the only
+launch value. Rotation is then live, and Envoy's side does not change. The CLI
+stays on the injected source for now. Whether it gets the host source depends
+on whether a host daemon turns out to be worth having for anything else.
 
 This decision adds to the one in `runtime.md`; it doesn't change it. Egress
 credentials still reach Compose as process environment, and only the
@@ -522,8 +568,9 @@ runs a long-lived endpoint of that shape.
   the catalog model and the secret server.
 - **Values in one container's environment.** `docker inspect` on
   `secret-server` shows them to anyone with access to the Docker engine. That
-  is true of every service's credentials today. The host-backed source removes
-  it.
+  is true of every service's credentials today. The host source
+  ([phase 8](#the-host-source-phase-8)) removes it: the server's environment
+  then holds only its path token.
 - **Direct egress isn't closed.** A container can still reach the internet
   without the egress gateway. The gateway keeps credentials out of agents. It
   doesn't stop an agent calling out. Putting workloads on an `internal: true`
@@ -580,9 +627,15 @@ runs a long-lived endpoint of that shape.
    `sds_probe` as a module's container. It checks that the probe reads its token
    over SDS, that a recreate of `secret-server` reaches it without a restart, and
    that only the secret server's container environment holds the value.
-8. **A host-backed source.** The in-environment server pulls from the desktop
-   (then possibly the CLI). Done when rotating a key in the desktop reaches
-   Envoy without recreating any container.
+8. **A host-backed source** (implemented, without the desktop wiring). The
+   server's `host` source long-polls a host endpoint. `[selection.egress]
+   source = "host"` plans it. In `olai-stack-runtime`, a `HostSecretEndpoint`
+   gets instances registered on start, and `HostEndpoint` (feature
+   `host-endpoint`) is the embeddable endpoint. Done when a rotation at the host
+   reaches Envoy without recreating any container:
+   `crates/stack-runtime/tests/live_host_source.rs` checks exactly that, with
+   both containers' ids, start times and restart counts unchanged. The desktop
+   embedding the endpoint is S9b.
 9. **SPIRE.** The server's caller check moves to SPIFFE IDs over mTLS, with
    multi-env phase 3. Done when the socket volumes are gone and consumers'
    code is unchanged.
