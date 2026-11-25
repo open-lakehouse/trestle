@@ -1,8 +1,10 @@
 //! `secret-server.yaml`: the listeners, their consumers, and which variable holds each
 //! secret and each keyring.
 //!
-//! The file is not secret: it names environment variables, never values. Values are read
-//! from the process environment once, by [`Config::resolve`].
+//! The file is not secret: it names environment variables, never values. With the default
+//! `env` source, values are read from the process environment once, by [`Config::resolve`].
+//! With the `host` source, the process environment holds only the path token of a host
+//! endpoint, and values are fetched from it and followed live ([`crate::source`]).
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -25,8 +27,30 @@ pub const CONFIG_VERSION: u32 = 1;
 pub struct Config {
     /// The file format version. Must be [`CONFIG_VERSION`].
     pub version: u32,
+    /// Where the values come from. Absent means [`SourceConfig::Env`].
+    #[serde(default)]
+    pub source: SourceConfig,
     /// One listener per consumer.
     pub listeners: Vec<ListenerConfig>,
+}
+
+/// Where the values of the variables the listeners name come from.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SourceConfig {
+    /// The process environment, read once at start.
+    #[default]
+    Env,
+    /// A host endpoint, fetched at start and followed with long polls:
+    /// `GET <url>/<token>/secrets/<variable>`.
+    Host {
+        /// The endpoint's base URL, e.g. `http://host.docker.internal:7480`. Plain HTTP: the
+        /// endpoint listens on the host's loopback or Docker bridge only, and the path token is
+        /// what authenticates the server.
+        url: String,
+        /// The environment variable that holds the path token, the server's only launch value.
+        token_env: String,
+    },
 }
 
 /// One Unix socket, the consumer it serves, the secrets that consumer may see, and the keys it
@@ -96,6 +120,14 @@ pub enum ConfigError {
     /// Keyring variables are set but don't hold a valid keyring.
     #[error("{}", InvalidKeyringsDisplay(.0))]
     InvalidKeyrings(Vec<InvalidKeyring>),
+    /// The host source could not be reached before the startup deadline.
+    #[error("the host source at {url} did not answer: {reason}")]
+    HostUnreachable {
+        /// The source's base URL (never the path token).
+        url: String,
+        /// The last failure.
+        reason: String,
+    },
 }
 
 /// A key whose variable doesn't hold a valid keyring. The reason never quotes the value.
@@ -198,6 +230,19 @@ impl Config {
         if self.listeners.is_empty() {
             return invalid("no listeners".into());
         }
+        if let SourceConfig::Host { url, token_env } = &self.source {
+            if token_env.is_empty() {
+                return invalid("the host source has an empty token_env".into());
+            }
+            let Some(rest) = url.strip_prefix("http://") else {
+                return invalid(format!("the host source url {url} is not an http:// URL"));
+            };
+            if rest.trim_end_matches('/').is_empty() || rest.contains(['?', '#']) {
+                return invalid(format!(
+                    "the host source url {url} has no host or has a query"
+                ));
+            }
+        }
         let mut consumers = HashSet::new();
         let mut sockets = HashSet::new();
         for listener in &self.listeners {
@@ -265,21 +310,62 @@ impl Config {
     /// Reads every listed variable through `lookup` and builds the [`Policy`].
     ///
     /// Fails with every unset or empty variable at once, so one restart fixes them all, and
-    /// otherwise with every keyring that cannot be read. `main` passes [`std::env::var_os`].
+    /// otherwise with every keyring that cannot be read. `main` passes [`std::env::var_os`]
+    /// for the `env` source; see [`crate::source::resolve`] for both sources.
     pub fn resolve(
         &self,
         lookup: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Policy, ConfigError> {
+        self.build(|name| lookup(name).map(OsString::into_encoded_bytes))
+            .map(|(policy, _)| policy)
+    }
+
+    /// The variables the listeners name, each once, in order.
+    pub fn variables(&self) -> Vec<&str> {
+        let mut seen = HashSet::new();
+        self.listeners
+            .iter()
+            .flat_map(|l| {
+                l.secrets
+                    .iter()
+                    .map(|s| s.env.as_str())
+                    .chain(l.keys.iter().map(|k| k.env.as_str()))
+            })
+            .filter(|env| seen.insert(*env))
+            .collect()
+    }
+
+    /// Builds the policy from each variable's bytes, and where each variable's value went.
+    /// Secrets that name the same variable share one cell.
+    pub(crate) fn build(
+        &self,
+        lookup: impl Fn(&str) -> Option<Vec<u8>>,
+    ) -> Result<(Policy, Bindings), ConfigError> {
         let mut policy = Policy::new();
+        let mut bindings = Bindings::new();
         let mut missing = Vec::new();
         let mut invalid_keyrings = Vec::new();
         for listener in &self.listeners {
             let caller = CallerId::new(&listener.consumer);
             for secret in &listener.secrets {
+                let shared = bindings.get(&secret.env).and_then(|targets| {
+                    targets.iter().find_map(|t| match t {
+                        Binding::Secret(cell) => Some(cell.clone()),
+                        Binding::Key { .. } => None,
+                    })
+                });
+                if let Some(cell) = shared {
+                    policy.allow_cell(caller.clone(), secret.name.clone(), cell);
+                    continue;
+                }
                 match lookup(&secret.env) {
                     Some(value) if !value.is_empty() => {
-                        let value = SecretValue::new(value.into_encoded_bytes());
-                        policy.allow(caller.clone(), secret.name.clone(), value);
+                        let cell = policy.cell(SecretValue::new(value));
+                        policy.allow_cell(caller.clone(), secret.name.clone(), cell.clone());
+                        bindings
+                            .entry(secret.env.clone())
+                            .or_default()
+                            .push(Binding::Secret(cell));
                     }
                     other => missing.push(MissingVariable {
                         consumer: listener.consumer.clone(),
@@ -292,14 +378,18 @@ impl Config {
             for key in &listener.keys {
                 match lookup(&key.env) {
                     Some(value) if !value.is_empty() => {
-                        let json = zeroize::Zeroizing::new(value.into_encoded_bytes());
+                        let json = zeroize::Zeroizing::new(value);
                         match Keyring::from_json(&key.name, &json) {
                             Ok(keyring) => {
-                                policy.allow_key(
-                                    caller.clone(),
-                                    key.name.clone(),
-                                    KeyHandle::new(keyring),
-                                );
+                                let handle = KeyHandle::new(keyring);
+                                policy.allow_key(caller.clone(), key.name.clone(), handle.clone());
+                                bindings
+                                    .entry(key.env.clone())
+                                    .or_default()
+                                    .push(Binding::Key {
+                                        name: key.name.clone(),
+                                        handle,
+                                    });
                             }
                             Err(e) => invalid_keyrings.push(InvalidKeyring {
                                 consumer: listener.consumer.clone(),
@@ -323,9 +413,26 @@ impl Config {
         } else if !invalid_keyrings.is_empty() {
             Err(ConfigError::InvalidKeyrings(invalid_keyrings))
         } else {
-            Ok(policy)
+            Ok((policy, bindings))
         }
     }
+}
+
+/// Where each variable's value went: the secret cells and keyrings a live source updates.
+pub(crate) type Bindings = std::collections::BTreeMap<String, Vec<Binding>>;
+
+/// One place a variable's value went.
+#[derive(Clone)]
+pub(crate) enum Binding {
+    /// A secret's value.
+    Secret(crate::policy::SecretCell),
+    /// A key's keyring, parsed from the value.
+    Key {
+        /// The key name.
+        name: String,
+        /// The keyring every consumer of the key shares.
+        handle: KeyHandle,
+    },
 }
 
 #[cfg(test)]
@@ -471,6 +578,71 @@ listeners:
         assert!(
             message.contains("$WORKGRAPH_REVIEWER_API_KEY is not set"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn the_source_defaults_to_env_and_parses_host() {
+        let config = Config::from_yaml(EXAMPLE).unwrap();
+        assert_eq!(config.source, SourceConfig::Env);
+        let host = EXAMPLE.replace(
+            "version: 1\n",
+            "version: 1\nsource:\n  kind: host\n  url: http://host.docker.internal:7480\n  token_env: SECRET_SERVER_HOST_TOKEN\n",
+        );
+        let config = Config::from_yaml(&host).unwrap();
+        assert_eq!(
+            config.source,
+            SourceConfig::Host {
+                url: "http://host.docker.internal:7480".into(),
+                token_env: "SECRET_SERVER_HOST_TOKEN".into(),
+            }
+        );
+        assert_eq!(
+            config.variables(),
+            [
+                "WORKGRAPH_PLANNER_API_KEY",
+                "WORKGRAPH_REVIEWER_API_KEY",
+                "OTHER_SERVER_KEK"
+            ]
+        );
+        let explicit = EXAMPLE.replace("version: 1\n", "version: 1\nsource: {kind: env}\n");
+        assert_eq!(
+            Config::from_yaml(&explicit).unwrap().source,
+            SourceConfig::Env
+        );
+    }
+
+    #[test]
+    fn rejects_bad_host_sources() {
+        for source in [
+            "{kind: host, url: https://host.docker.internal:7480, token_env: T}",
+            "{kind: host, url: 'http://', token_env: T}",
+            "{kind: host, url: 'http://h:1/?q=1', token_env: T}",
+            "{kind: host, url: 'http://h:1', token_env: ''}",
+            "{kind: host, url: 'http://h:1'}",
+            "{kind: host, url: 'http://h:1', token_env: T, token: x}",
+            "{kind: vault}",
+        ] {
+            let yaml = EXAMPLE.replace("version: 1\n", &format!("version: 1\nsource: {source}\n"));
+            assert!(Config::from_yaml(&yaml).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn secrets_naming_one_variable_share_a_cell() {
+        let yaml = "version: 1\nlisteners:\n  - {socket: /a, consumer: a, secrets: [{name: x, env: V}]}\n  - {socket: /b, consumer: b, secrets: [{name: y, env: V}]}\n";
+        let (policy, bindings) = Config::from_yaml(yaml)
+            .unwrap()
+            .build(|_| Some(b"v1".to_vec()))
+            .unwrap();
+        assert_eq!(bindings["V"].len(), 1);
+        let Binding::Secret(cell) = &bindings["V"][0] else {
+            panic!("a secret binding");
+        };
+        cell.set(SecretValue::new("v2"));
+        assert_eq!(
+            policy.get(&CallerId::new("b"), "y"),
+            Some(SecretValue::new("v2"))
         );
     }
 

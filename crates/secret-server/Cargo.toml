@@ -28,13 +28,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "fs", "time"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 zeroize = { workspace = true }
 
 # crates.io dependencies (in alphabetical order)
 clap = { version = "4.5", features = ["derive", "env"] }
+# The host source's client: plain HTTP to the host's loopback or Docker bridge, no TLS.
+reqwest = { version = "0.13", default-features = false }
 # The Envoy v3 protos with tonic 0.14 server and client stubs (SDS service, `Secret`,
 # `DiscoveryRequest`/`DiscoveryResponse`).
 envoy-types = "0.7"
@@ -49,6 +51,8 @@ olai-key-service = { path = "../key-service", features = ["client"] }
 tempfile = "3.1"
 tonic = { version = "0.14", default-features = false, features = ["channel"] }
 tower = { version = "0.5", features = ["util"] }
+# The fake host endpoint of the host source tests.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
 # Docker test only (`emulator-it`).
 reqwest = { workspace = true }
 testcontainers = { version = "0.28" }
