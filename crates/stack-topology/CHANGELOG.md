@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.29](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.28...olai-stack-topology-v0.0.29) - 2026-11-25
+
+### Added
+
+- unity-catalog-rs seals through the key service (#479)
+
+### Fixed
+
+- pin the secret server image at 0.0.4 (#478)
+
 ## [0.0.28](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.27...olai-stack-topology-v0.0.28) - 2026-11-25
 
 ### Added
