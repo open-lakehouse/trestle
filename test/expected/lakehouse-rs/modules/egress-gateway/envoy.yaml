@@ -1,0 +1,32 @@
+# Egress Envoy config, rendered from the planner's egress routes. One listener per route:
+# `credential_injector` has no per-route configuration, so each credential needs its own
+# filter chain. Credentials come from the secret server over SDS and are never written here.
+
+# SDS over gRPC needs a node id and cluster.
+node: { id: egress-gateway, cluster: egress-gateway }
+
+static_resources:
+  listeners: []
+  clusters:
+    # The secret server, over the Unix socket on the volume only this container shares with it.
+    - name: secret_server
+      type: STATIC
+      connect_timeout: 2s
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: secret_server
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    pipe: { path: /run/trestle-sds/sds.sock }
+
+# Admin binds the container's loopback and is never published: only the in-container health
+# check reaches /ready, and nothing on the network reaches /config_dump or /quitquitquit.
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: 9901 }

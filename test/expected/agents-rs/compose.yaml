@@ -3,6 +3,8 @@
 name: agents-rs
 
 configs:
+  egress_envoy_config:
+    file: ./modules/egress-gateway/envoy.yaml
   envoy_config:
     file: ./modules/envoy/envoy.yaml
   gateway_certs_script:
@@ -23,6 +25,8 @@ configs:
     file: ./modules/postgres/init-databases.sh
   rustfs_sts_shim:
     file: ./modules/rustfs/sts_shim.py
+  secret_server_config:
+    file: ./modules/egress-gateway/secret-server.yaml
   unity_catalog_rs_config:
     file: ./modules/unity-catalog-rs/config.yaml
 
@@ -31,11 +35,15 @@ secrets:
     file: ./modules/postgres/secrets/postgres_password
 
 include:
+  - path: ./modules/egress-gateway/compose.yaml
+    project_directory: .
   - path: ./modules/envoy/compose.yaml
     project_directory: .
   - path: ./modules/postgres/compose.yaml
     project_directory: .
-  - path: ./modules/unity-catalog-rs/compose.yaml
+  - path:
+      - ./modules/unity-catalog-rs/compose.yaml
+      - ./modules/egress-gateway/consumers/unity-catalog-rs.yaml
     project_directory: .
   - path: ./modules/uc-mcp/compose.yaml
     project_directory: .

@@ -89,18 +89,20 @@ it, but a branch that existed before the deploy, or one reset since, needs it de
 function is missing. Function URLs are public: the function must check the caller's Neon Auth
 token itself.
 
-Deploy it with the same configuration it runs with in a container:
+Deploy it with this configuration:
 
 `UC_SERVER_CONFIG_YAML`:
 
 ```yaml
 # What mangrove's Unity Catalog server runs with wherever it runs: this file in a container,
-# or `UC_SERVER_CONFIG_YAML` for a Neon Function. API-only, and anonymous until the services
-# verify callers' tokens. The key-encryption key is read from `UC_SERVER_KEK` when the server
-# starts, so it is never written here. Without it the server refuses to start; there is no
-# fallback key.
+# or `UC_SERVER_CONFIG_YAML` for a Neon Function, each followed by its placement's
+# `encryption` block. API-only, and anonymous until the services verify callers' tokens.
 ui: { serve: false }
 auth: { mode: anonymous }
+
+# As a Neon Function, which can't reach the secret server: the key-encryption key is read from
+# `UC_SERVER_KEK` when the server starts, so it is never written here. Without it the server
+# refuses to start; there is no fallback key.
 encryption:
   active: { id: kek-1, key: { env: UC_SERVER_KEK } }
 ```

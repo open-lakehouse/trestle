@@ -8,7 +8,7 @@ function is missing. Function URLs are public: the function must check the calle
 token itself.
 {%- if f.env or f.secrets %}
 
-Deploy it with the same configuration it runs with in a container:
+Deploy it with this configuration:
 {%- for name, value in f.env | items %}
 
 `{{ name }}`:

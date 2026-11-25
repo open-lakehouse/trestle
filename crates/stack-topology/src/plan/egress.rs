@@ -37,7 +37,7 @@ use serde::Serialize;
 use super::hosted::{Secrets, env_refs, function_url_var};
 use super::{PlanError, Selection};
 use crate::catalog::Catalog;
-use crate::catalog::module::{DeclaredSecret, ModuleId, SdsSecret, StackFacts};
+use crate::catalog::module::{DeclaredSecret, KeyImport, ModuleId, SdsSecret, StackFacts};
 use crate::model::egress::{EgressRoute, McpRoute, egress_url_var};
 use crate::model::endpoint::InjectedCredential;
 use crate::model::placement::Placement;
@@ -359,6 +359,10 @@ pub struct ServedKey {
     pub env: String,
     /// The variable the consumer finds [`name`](Self::name) in (see [`key_name_var`]).
     pub name_var: String,
+    /// Where its first version comes from when the environment has no keyring for it yet
+    /// (see [`Provides::key_imports`](crate::Provides::key_imports)).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<KeyImport>,
 }
 
 /// The egress-gateway module the catalog offers, if any.
@@ -385,6 +389,8 @@ pub(super) struct SdsDemand {
     pub(super) module: ModuleId,
     pub(super) secrets: Vec<SdsSecret>,
     pub(super) keys: Vec<String>,
+    /// The module's [key imports](crate::Provides::key_imports), checked by [`key_imports`].
+    pub(super) imports: BTreeMap<String, KeyImport>,
 }
 
 /// What the settled graph's modules declare that the secret server serves: each module's
@@ -631,6 +637,7 @@ fn check_keys(demand: &SdsDemand, planned: &[SdsConsumer]) -> Result<Vec<ServedK
             name: key.clone(),
             env: keyring_var(module, key),
             name_var: key_name_var(key),
+            import: demand.imports.get(key).cloned(),
         };
         if let Some(other) = out.iter().find(|k| k.name_var == served.name_var) {
             return Err(invalid_key(
@@ -664,6 +671,58 @@ fn check_keys(demand: &SdsDemand, planned: &[SdsConsumer]) -> Result<Vec<ServedK
         out.push(served);
     }
     Ok(out)
+}
+
+/// A module's key imports: each of a key it declares, from a variable by a valid name, under an
+/// alias a keyring accepts (1 to 255 bytes, not of the form `<key>@v<n>`, which versions take).
+pub(super) fn key_imports(
+    module: &ModuleId,
+    declared: &[String],
+    imports: &BTreeMap<String, KeyImport>,
+) -> Result<BTreeMap<String, KeyImport>, PlanError> {
+    for (key, import) in imports {
+        if !declared.contains(key) {
+            return Err(invalid_key(
+                module,
+                key,
+                "it has an import but isn't one of the module's keys",
+            ));
+        }
+        if !is_var_name(&import.from) {
+            return Err(invalid_key(
+                module,
+                key,
+                &format!(
+                    "its import's variable `{}` is not a variable name",
+                    import.from
+                ),
+            ));
+        }
+        if let Some(alias) = &import.alias {
+            let versioned = alias
+                .rsplit_once("@v")
+                .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            if alias.is_empty() || alias.len() > 255 || versioned {
+                return Err(invalid_key(
+                    module,
+                    key,
+                    &format!(
+                        "its import's alias `{alias}` must be 1 to 255 bytes and not of the \
+                         form `<key>@v<n>`"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(imports.clone())
+}
+
+/// Letters, digits and `_`, not starting with a digit.
+fn is_var_name(name: &str) -> bool {
+    name.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn invalid_sds(module: &ModuleId, secret: &str, reason: &str) -> PlanError {

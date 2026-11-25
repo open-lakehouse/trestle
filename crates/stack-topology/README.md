@@ -349,6 +349,31 @@ principal search uses mangrove's SCIM API, and calls that server directly on the
   gateway's host-side and in-network names (`envoy`, or `<env>.localhost` and `<env>.internal`
   under sign-in).
 
+## Unity Catalog in Rust (`unity-catalog-rs`)
+
+The `unity-catalog-rs` module runs mangrove's Unity Catalog server, another implementation of the
+`unity-catalog` API (`unity-catalog-oss` is the other). It runs in a container or, with
+`[selection.hosted.unity-catalog-rs] vendor = "neon-function"`, as a Neon Function. The two
+placements share one configuration document except for how the server seals what it stores:
+
+- **In a container** it seals through the secret server's key service, under the keyring of its
+  key `server-kek` (`Provides::keys`). The container gets the socket (`TRESTLE_SDS_SOCKET`) and the
+  key's name (`TRESTLE_KEY_SERVER_KEK`), never a key-encryption key. The keyring is held by
+  `TRESTLE_KEYRING_UNITY_CATALOG_RS__SERVER_KEK`, which only the secret server's launch
+  environment has. `trestle key rotate <ws>/<env> unity-catalog-rs/server-kek` mints it for a new
+  environment and adds versions while the server runs. For an environment that ran on
+  `UC_SERVER_KEK` before, `trestle up` imports that key once as version 1, aliased `kek-1`
+  (`Provides::key_imports`), or `trestle key import … --from UC_SERVER_KEK --alias kek-1` does it
+  by hand. The environment gets the egress module for the secret server.
+- **As a Neon Function** it can't reach the socket, so `UC_SERVER_CONFIG_YAML` keeps a local
+  key-encryption key (`encryption.active`, `kek-1`), read from `UC_SERVER_KEK`, which the
+  function's deployment sets (`function_secrets`).
+
+mangrove's admin API sweeps and counts the sealed values: `POST /api/admin/v1/encryption/rewrap`
+and `GET /api/admin/v1/encryption/kek-usage`. The local server is anonymous with an allow-all
+policy, so any caller on the environment's network may use them. The gateway doesn't route them.
+The generated README's deploy step walks through the keyring.
+
 ## Graph queries (PuppyGraph)
 
 The `puppygraph` module runs [PuppyGraph](https://docs.puppygraph.com), which answers

@@ -389,7 +389,8 @@ environment, and only `secret-server` references it.
   - **Adoption** of SDS tokens in our services (mangrove, headwaters,
     `unity-catalog-rs`'s service-to-service tokens) comes next. A KEK such as
     `UC_SERVER_KEK` doesn't go over SDS: it moves to the key service
-    ([Key material](#key-material)).
+    ([Key material](#key-material)). `unity-catalog-rs` is the first module to
+    use the same socket, for its key (K5).
 
 ## Key material
 
@@ -467,6 +468,12 @@ That variable is derived by the planner and declared, as required, on the
 secret server alone, so the module never names it and no other rendered file
 does either.
 
+A module that sealed under a KEK of its own before also says where the first
+version comes from (`Provides::key_imports`): the old variable and the id its
+blobs carry. The planner puts it on the served key (`ServedKey::import`), and
+`trestle up` imports it once for an environment that has no keyring yet
+(see [The first adopter](#the-first-adopter-unity-catalog-rs)).
+
 **The CLI.** `trestle key` keeps each keyring in this machine's keychain,
 stored on the environment the way `trestle var set --secret` stores a secret:
 
@@ -501,8 +508,59 @@ trestle key show demo/dev unity-catalog-rs/server-kek
   data (a hosted database, say). `trestle key` refuses writes on a team's state
   until there is a shared keyring source.
 
-Next comes adoption in mangrove (K4) and `unity-catalog-rs` (K5). With the
-host-backed source (phase 8), keyrings come from the desktop like other values.
+### The first adopter: `unity-catalog-rs`
+
+mangrove's server reads `encryption.provider.key_service` (K4), and the
+`unity-catalog-rs` module seals through it in a container (K5, implemented):
+
+```rust
+Provides {
+    keys: vec!["server-kek".into()],
+    key_imports: [("server-kek".into(), KeyImport::new("UC_SERVER_KEK", "kek-1"))].into(),
+    ..Provides::default()
+}
+```
+
+```yaml
+encryption:
+  provider:
+    key_service:
+      socket: { env: TRESTLE_SDS_SOCKET }
+      key: { env: TRESTLE_KEY_SERVER_KEK }
+```
+
+- **The container holds no KEK.** `UC_SERVER_KEK` is gone from its environment
+  and from the module's declared secrets. The keyring
+  (`TRESTLE_KEYRING_UNITY_CATALOG_RS__SERVER_KEK`) reaches `secret-server`
+  alone. An environment with the module gets the egress module for its secret
+  server, whether or not it has routes.
+- **The Neon Function keeps its local KEK.** A function can't reach the socket,
+  so its `UC_SERVER_CONFIG_YAML` keeps `encryption.active` (`kek-1`, from
+  `UC_SERVER_KEK`, in `function_secrets`). The two placements share the
+  document but for its `encryption` block.
+- **Migration.** An environment that ran the server on `UC_SERVER_KEK` has its
+  data sealed under `kek-1`. When `trestle up` starts a revision whose key has
+  no keyring yet and `UC_SERVER_KEK` resolves (on the environment, its
+  workspace, or in the shell), it imports it as version 1 with the alias
+  `kek-1`, logs it, and starts. That happens once: the keyring exists afterwards
+  and is add-only. When `UC_SERVER_KEK` doesn't resolve, `up` stops before
+  Compose and prints both ways out: `trestle key import … --from UC_SERVER_KEK
+  --alias kek-1` for data sealed before, `trestle key rotate …` for a new
+  environment. It never starts a server on a fresh keyring its data can't open.
+- **Team state.** Keyrings can't be written on a team's state, so `trestle up`
+  refuses a revision there that seals under a key, until a shared keyring
+  source exists ([#471](https://github.com/open-lakehouse/trestle/issues/471)
+  and after).
+- **Rotation, live.** `trestle key rotate` recreates `secret-server`, and the
+  server's client follows the key without a restart. mangrove's admin API then
+  sweeps (`POST /api/admin/v1/encryption/rewrap`) and counts
+  (`GET /api/admin/v1/encryption/kek-usage`) before `trestle key retire`. In the
+  module both are open to any caller on the environment's network (anonymous,
+  with the `constant` policy). The gateway doesn't route them.
+
+mangrove's `crates/server/docs/kek-rotation.md` is the runbook. With the
+host-backed source (phase 8), keyrings come from the desktop like other values
+(K6).
 
 ## The first user: agents and the workgraph function
 
@@ -619,7 +677,8 @@ runs a long-lived endpoint of that shape.
    them. Done when an agent in a local environment works on the work graph
    through its route, and its key appears nowhere but the keychain and the
    secret server's environment.
-7. **Rust services as SDS consumers** (implemented, without adoption).
+7. **Rust services as SDS consumers** (implemented; `unity-catalog-rs` adopts
+   the socket for its key, K5).
    `SdsCredentialProvider` in `olai-http`, module-declared SDS secrets
    (`Provides::sds_secrets`), and then adoption of tokens by our own services. Done when
    a service reads a secret over its socket and the secret is gone from its
@@ -646,4 +705,5 @@ KEKs take their own track, next to phases 7 and 8 ([Key material](#key-material)
 K1 is olai-store's rewrap sweep, K2 the key service in `olai-secret-server` and
 its `KeyProvider` client in `olai-key-service` (implemented), K3 the topology,
 runtime and CLI side, K4 and K5 adoption in mangrove and `unity-catalog-rs`
-(importing `UC_SERVER_KEK` as version 1, aliased `kek-1`), and K6 the desktop.
+(implemented: importing `UC_SERVER_KEK` as version 1, aliased `kek-1`, see
+[The first adopter](#the-first-adopter-unity-catalog-rs)), and K6 the desktop.

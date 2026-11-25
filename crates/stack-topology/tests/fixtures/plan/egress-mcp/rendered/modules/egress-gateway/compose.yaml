@@ -44,8 +44,11 @@ services:
       TICKETS_API_KEY:
       DOCS_API_KEY:
       CATALOG_TOOLS_KEY:
+      TRESTLE_KEYRING_UNITY_CATALOG_RS__SERVER_KEK:
     volumes:
       - sds-egress-gateway:/run/trestle-sds/egress-gateway
+      - sds-unity-catalog-rs:/run/trestle-sds/unity-catalog-rs
 
 volumes:
   sds-egress-gateway:
+  sds-unity-catalog-rs:

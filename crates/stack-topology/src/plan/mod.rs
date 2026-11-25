@@ -1307,13 +1307,18 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             let knobs = &settled.knobs[m.id()];
             let secrets = m.sds_secrets_in(knobs, &settled.stack_facts);
             let keys = m.keys_in(knobs, &settled.stack_facts);
-            (!secrets.is_empty() || !keys.is_empty()).then(|| egress::SdsDemand {
-                module: m.id().clone(),
-                secrets: secrets.into_owned(),
-                keys: keys.into_owned(),
+            (!secrets.is_empty() || !keys.is_empty()).then(|| {
+                let imports =
+                    egress::key_imports(m.id(), &m.provides().keys, &m.provides().key_imports)?;
+                Ok(egress::SdsDemand {
+                    module: m.id().clone(),
+                    secrets: secrets.into_owned(),
+                    keys: keys.into_owned(),
+                    imports,
+                })
             })
         })
-        .collect();
+        .collect::<Result<_, PlanError>>()?;
     let egress = egress::plan_egress(
         selection,
         catalog,

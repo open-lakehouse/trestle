@@ -1,0 +1,5 @@
+# As a Neon Function, which can't reach the secret server: the key-encryption key is read from
+# `UC_SERVER_KEK` when the server starts, so it is never written here. Without it the server
+# refuses to start; there is no fallback key.
+encryption:
+  active: { id: kek-1, key: { env: UC_SERVER_KEK } }

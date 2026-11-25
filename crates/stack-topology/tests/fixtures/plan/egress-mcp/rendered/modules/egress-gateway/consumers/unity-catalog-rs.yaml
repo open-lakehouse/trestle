@@ -1,0 +1,15 @@
+# Written by the planner and merged over `modules/unity-catalog-rs/compose.yaml`.
+# Its socket to the secret server, which serves it its SDS secrets and its keys: only
+# it and the secret server mount the volume, and the mount is its identity.
+services:
+  unitycatalog:
+    environment:
+      TRESTLE_KEY_SERVER_KEK: "server-kek"
+      TRESTLE_SDS_SOCKET: "/run/trestle-sds/sds.sock"
+    volumes:
+      - sds-unity-catalog-rs:/run/trestle-sds
+    depends_on:
+      secret-server:
+        condition: service_started
+volumes:
+  sds-unity-catalog-rs:

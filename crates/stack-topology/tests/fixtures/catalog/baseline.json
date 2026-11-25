@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:db0bbb1140eaa00b79f9f17c840bbb73bfd0c864b39d0623ae07cfe3576e0f91"
+    "digest": "sha256:3d84ff9765f259920fdeee66b25cb54060d74657d7f1d91c3ff4809014693ae7"
   },
   "modules": [
     {
@@ -753,7 +753,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/mangrove:0.0.23",
+          "default": "ghcr.io/open-lakehouse/mangrove:0.0.24",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "advanced": true
@@ -1005,7 +1005,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/mangrove:0.0.23",
+          "default": "ghcr.io/open-lakehouse/mangrove:0.0.24",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "advanced": true

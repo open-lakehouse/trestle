@@ -299,14 +299,19 @@ Two questions decide how a component is modeled:
   whose `api` is `unity-catalog` in the plan's graph.
 - **Where does it run?** That's a choice on the module, not another module: a
   local container, or a Neon Function (`selection.hosted[id]`), offered only by
-  a module whose implementation runs as one (`Provides::function`). One
-  configuration document serves both placements. `unity-catalog-rs` mounts
-  `uc-server.yaml` in its container, and its function is deployed with the same
+  a module whose implementation runs as one (`Provides::function`). The
+  placements share a configuration document but can differ where the
+  placement decides what the service can reach. `unity-catalog-rs` mounts
+  `uc-server.yaml` in its container, with where it listens, its database and an
+  `encryption` block that seals through the secret server's key service (its key
+  `server-kek`, `Provides::keys`). Its function is deployed with the same
   document as `UC_SERVER_CONFIG_YAML` (`Provides::function_env`, listed in the
-  function's deploy step and in `Plan::neon_requirements()`). Secrets such as its
-  key-encryption key `UC_SERVER_KEK` are only named (`function_secrets`): the
-  container gets the value from the process that starts Compose, and the
-  function's deployment sets it.
+  function's deploy step and in `Plan::neon_requirements()`), but with a local
+  key-encryption key in its `encryption` block, because a function can't reach
+  the secret server's socket. That key, `UC_SERVER_KEK`, is only named
+  (`function_secrets`): the function's deployment sets it. The container holds
+  no key-encryption key at all; its keyring reaches the secret server alone
+  ([egress-gateway.md](egress-gateway.md#the-first-adopter-unity-catalog-rs)).
 
 Headwaters is one implementation that runs both ways, so it is one module.
 
