@@ -141,6 +141,8 @@ pub fn run_up(args: UpArgs) -> Result<()> {
             rev.number()
         );
     }
+    // Every key it seals under has a keyring before anything is created or started.
+    super::key::ensure_keyrings(&ctx, &args.target, &rev)?;
     let existing = ctx
         .store
         .instances_of(&env.id)?
@@ -179,6 +181,17 @@ pub fn run_up(args: UpArgs) -> Result<()> {
     let materialized = ctx
         .block_on(async { Ok(runtime.start(&id).await?) })
         .map_err(|e: Error| match &e {
+            Error::Instance(olai_stack_runtime::InstanceError::MissingSecrets(names))
+                if super::key::is_keyring_var(&names[0]) =>
+            {
+                let hint = format!(
+                    "{} holds a keyring, which only `trestle key` writes: `trestle key rotate \
+                     {}/{} <module>/<key>` for a new one, `trestle key import …` from an \
+                     existing key",
+                    names[0], ws.name, env.name
+                );
+                e.with_hint(hint)
+            }
             Error::Instance(olai_stack_runtime::InstanceError::MissingSecrets(names)) => {
                 let hint = format!(
                     "export {0} before `trestle up`, or keep it in the keychain: \

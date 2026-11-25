@@ -21,12 +21,15 @@ impl Team {
             eprintln!("DATABASE_URL_PG is not set: skipping the shared-state CLI test");
             return None;
         };
+        // The clock alone can repeat across tests started at once (macOS keeps microseconds).
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let schema = format!(
-            "trestle_cli_test_{}",
+            "trestle_cli_test_{}_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         sql(&admin, &format!("CREATE SCHEMA {schema}"));
         let separator = if admin.contains('?') { '&' } else { '?' };
@@ -354,4 +357,43 @@ fn keyrings_are_refused_on_a_teams_state() {
         );
     }
     assert!(!alice.path("keychain.json").exists());
+}
+
+/// No keyring can be written on a team's state, so `up` refuses a revision that seals under a
+/// key there (`unity-catalog-rs`'s `server-kek`), even with `UC_SERVER_KEK` set to import from,
+/// and starts nothing.
+#[test]
+fn up_refuses_a_key_on_a_teams_state() {
+    let Some(team) = Team::new() else { return };
+    let alice = Machine::new(&team);
+    alice.ok(&["state", "init", "--neon", "proj", "--name", "team"]);
+    alice.ok(&["--state", "team", "ws", "create", "demo"]);
+    alice.ok(&[
+        "--state",
+        "team",
+        "env",
+        "create",
+        "demo/dev",
+        "--select",
+        "unity-catalog-rs",
+    ]);
+    alice.ok(&["--state", "team", "env", "commit", "demo/dev"]);
+    let out = alice
+        .cmd(&["--state", "team", "up", "demo/dev"])
+        .env(
+            "UC_SERVER_KEK",
+            "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        )
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("seals under `unity-catalog-rs/server-kek`")
+            && err.contains("a team's state can't hold yet")
+            && err.contains("this machine's own state"),
+        "{err}"
+    );
+    assert!(!alice.path("keychain.json").exists());
+    assert!(!alice.path("engine.json").exists());
 }

@@ -1516,3 +1516,169 @@ fn keyring_writes_that_drop_material_are_refused() {
     assert!(out.contains("kept the keyring"), "{out}");
     assert!(home.keychain().contains_key(&key));
 }
+
+// `up` and `unity-catalog-rs`, which seals through the key service under `server-kek`: an
+// environment that ran it on `UC_SERVER_KEK` has that key imported once as version 1 (alias
+// `kek-1`); with no keyring and no `UC_SERVER_KEK`, nothing starts.
+
+/// The variable the planner derives for `unity-catalog-rs`'s key `server-kek`.
+const UC_KEYRING_VAR: &str = "TRESTLE_KEYRING_UNITY_CATALOG_RS__SERVER_KEK";
+
+/// `demo/dev` with `unity-catalog-rs`, committed once.
+fn uc_rs_demo(home: &Home) {
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&["env", "create", "demo/dev", "--select", "unity-catalog-rs"]);
+    home.ok(&["env", "commit", "demo/dev"]);
+}
+
+/// The stored keyring of `unity-catalog-rs/server-kek` on `demo/dev`, as JSON.
+fn uc_keyring(home: &Home) -> Value {
+    let key = home.keychain_key(&format!("^{ID}/{UC_KEYRING_VAR}$"));
+    serde_json::from_str(home.keychain()[&key].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn up_imports_an_existing_kek_once() {
+    let home = Home::new();
+    uc_rs_demo(&home);
+    home.ok_with_stdin(
+        &["var", "set", "demo/dev", "--secret", "UC_SERVER_KEK"],
+        EXISTING_KEY,
+    );
+    let out = home.ok(&["up", "demo/dev"]);
+    assert!(
+        out.contains(
+            "imported `UC_SERVER_KEK` as server-kek@v1 (alias kek-1) for \
+             unity-catalog-rs/server-kek on demo/dev, once"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("demo_dev_r1"), "{out}");
+    assert!(!out.contains(EXISTING_KEY), "{out}");
+    let ring = uc_keyring(&home);
+    assert_eq!(ring["versions"]["1"], EXISTING_KEY);
+    assert_eq!(ring["active"], 1);
+    let shown = home.json(
+        &[
+            "key",
+            "show",
+            "demo/dev",
+            "unity-catalog-rs/server-kek",
+            "--json",
+        ],
+        "keyring",
+    );
+    assert_eq!(shown["versions"], serde_json::json!([1]));
+    assert_eq!(shown["aliases"], serde_json::json!({"kek-1": 1}));
+
+    // Never again: a rotation and a changed `UC_SERVER_KEK` leave the keyring to `trestle key`.
+    home.ok(&["down", "demo/dev"]);
+    home.ok(&["key", "rotate", "demo/dev", "unity-catalog-rs/server-kek"]);
+    let rotated = uc_keyring(&home);
+    home.ok_with_stdin(
+        &["var", "set", "demo/dev", "--secret", "UC_SERVER_KEK"],
+        OTHER_KEY,
+    );
+    let again = home.ok(&["up", "demo/dev"]);
+    assert!(!again.contains("imported"), "{again}");
+    assert_eq!(uc_keyring(&home), rotated);
+    assert_eq!(rotated["versions"]["1"], EXISTING_KEY);
+    assert_eq!(rotated["active"], 2);
+}
+
+#[test]
+fn up_imports_an_existing_kek_from_the_shell() {
+    let home = Home::new();
+    uc_rs_demo(&home);
+    let out = home
+        .cmd(&["up", "demo/dev"])
+        .env("UC_SERVER_KEK", OTHER_KEY)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("imported `UC_SERVER_KEK`"));
+    assert_eq!(uc_keyring(&home)["versions"]["1"], OTHER_KEY);
+}
+
+#[test]
+fn up_without_a_keyring_or_an_existing_kek_starts_nothing() {
+    let home = Home::new();
+    uc_rs_demo(&home);
+    let err = home.fails(&["up", "demo/dev"]);
+    assert!(
+        err.contains("unity-catalog-rs/server-kek has no keyring on demo/dev")
+            && err.contains("`UC_SERVER_KEK`, which unity-catalog-rs sealed under before"),
+        "{err}"
+    );
+    assert!(
+        err.contains(
+            "trestle key import demo/dev unity-catalog-rs/server-kek --from UC_SERVER_KEK \
+             --alias kek-1"
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("trestle key rotate demo/dev unity-catalog-rs/server-kek"),
+        "{err}"
+    );
+    assert!(home.projects().is_empty(), "{:?}", home.projects());
+    assert!(home.keychain().is_empty(), "{:?}", home.keychain());
+    // No instance was made for it either.
+    assert_eq!(
+        home.json(&["ps", "--json"], "instances"),
+        serde_json::json!([])
+    );
+
+    // A bad old key is refused, not imported.
+    let out = home
+        .cmd(&["up", "demo/dev"])
+        .env("UC_SERVER_KEK", "AQID")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("importing `UC_SERVER_KEK`"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(home.keychain().is_empty());
+
+    // A new environment's way out.
+    home.ok(&["key", "rotate", "demo/dev", "unity-catalog-rs/server-kek"]);
+    let out = home.ok(&["up", "demo/dev"]);
+    assert!(!out.contains("imported"), "{out}");
+    assert_eq!(home.projects(), ["demo_dev_r1"]);
+}
+
+#[test]
+fn a_keyring_that_exists_ignores_an_existing_kek() {
+    let home = Home::new();
+    uc_rs_demo(&home);
+    home.ok_with_stdin(
+        &[
+            "key",
+            "import",
+            "demo/dev",
+            "unity-catalog-rs/server-kek",
+            "--alias",
+            "kek-1",
+        ],
+        EXISTING_KEY,
+    );
+    let out = home
+        .cmd(&["up", "demo/dev"])
+        .env("UC_SERVER_KEK", OTHER_KEY)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("imported"));
+    assert_eq!(uc_keyring(&home)["versions"]["1"], EXISTING_KEY);
+}

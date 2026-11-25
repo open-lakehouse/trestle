@@ -21,6 +21,11 @@
 //!
 //! The keychain holds the only copy of a keyring: lose it and the data sealed under it can't be
 //! read. On a team's state each machine has its own keychain, so the writes are refused there.
+//!
+//! `trestle up` checks first ([`ensure_keyrings`]) that every key the revision seals under has a
+//! keyring. A key whose module sealed under a key of its own before (`Provides::key_imports`,
+//! e.g. `unity-catalog-rs`'s `UC_SERVER_KEK`) is imported from it once, as `import` would;
+//! otherwise `up` stops and says what to run. On a team's state it refuses such a revision.
 
 use std::io::IsTerminal;
 
@@ -29,8 +34,8 @@ use olai_stack_runtime::{
     EnvProvider, Keyring, KeyringSummary, SecretProvider, SecretProviders, SecretValue, kek_id,
 };
 use olai_stack_state::{Environment, Revision, VarValue};
-use olai_stack_topology::ModuleId;
 use olai_stack_topology::plan::keyring_var;
+use olai_stack_topology::{KeyImport, ModuleId};
 use serde::Serialize;
 
 use super::output::emit;
@@ -263,6 +268,14 @@ fn check_served(
 
 /// The keys the revision's secret server holds keyrings for.
 fn served_keys(rev: &Revision) -> Result<Vec<KeyName>> {
+    Ok(served_key_imports(rev)?
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect())
+}
+
+/// [`served_keys`], each with where its first version comes from, when its module says.
+fn served_key_imports(rev: &Revision) -> Result<Vec<(KeyName, Option<KeyImport>)>> {
     let catalog = super::env_store::catalog_for(rev.modules())?;
     let plan = rev
         .manifest()
@@ -272,11 +285,110 @@ fn served_keys(rev: &Revision) -> Result<Vec<KeyName>> {
         .egress
         .iter()
         .flat_map(|e| e.keys())
-        .map(|(module, key)| KeyName {
-            module: module.clone(),
-            key: key.name.clone(),
+        .map(|(module, key)| {
+            (
+                KeyName {
+                    module: module.clone(),
+                    key: key.name.clone(),
+                },
+                key.import.clone(),
+            )
         })
         .collect())
+}
+
+/// Before `trestle up` starts `rev` of `target`'s environment: each key a module seals under in
+/// it must have a keyring, or the module's server would start on none (or on a fresh one that
+/// can't open what it sealed before).
+///
+/// - On a team's state, a revision that seals under a key is refused: no keyring can be written
+///   there.
+/// - A key with no keyring whose module names an import (`Provides::key_imports`) is imported,
+///   once, from that variable when it resolves (the environment's vars, the workspace's, else
+///   this process's environment), under the module's alias, as `trestle key import` does.
+/// - Any other key with no keyring stops the start, saying what to run.
+pub(super) fn ensure_keyrings(ctx: &Ctx, target: &Target, rev: &Revision) -> Result<()> {
+    let keys = served_key_imports(rev)?;
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let env_target = Target {
+        rev: None,
+        ..target.clone()
+    };
+    if ctx.is_shared() {
+        let names: Vec<String> = keys.iter().map(|(k, _)| format!("`{k}`")).collect();
+        return Err(Error::other(format!(
+            "r{} of {env_target} seals under {}, whose keyring a team's state can't hold yet: \
+             keyrings live in one machine's keychain, so each machine would hold a different \
+             one for the same sealed data",
+            rev.number(),
+            names.join(", ")
+        ))
+        .with_hint(
+            "run it on this machine's own state; a shared keyring source is not supported yet \
+             (https://github.com/open-lakehouse/trestle/issues/471)",
+        ));
+    }
+    let (_, env) = env_target.environment(&ctx.store)?;
+    for (key, import) in keys {
+        let var = keyring_var(&key.module, &key.key);
+        if load(ctx, &env, &var)?.is_some() {
+            continue;
+        }
+        let rotate = format!("trestle key rotate {env_target} {key}");
+        let Some(import) = import else {
+            return Err(Error::other(format!(
+                "{key} has no keyring on {env_target}, so its module can't seal or open anything"
+            ))
+            .with_hint(format!("`{rotate}` makes one")));
+        };
+        let alias = import
+            .alias
+            .as_ref()
+            .map(|a| format!(" --alias {a}"))
+            .unwrap_or_default();
+        let import_cmd = format!(
+            "trestle key import {env_target} {key} --from {}{alias}",
+            import.from
+        );
+        let Some(material) = lookup_secret(ctx, &env_target, &env, &import.from)? else {
+            return Err(Error::other(format!(
+                "{key} has no keyring on {env_target}, and `{}`, which {} sealed under before, \
+                 is set neither on it nor in this shell: starting on a new keyring would leave \
+                 what it sealed unreadable",
+                import.from, key.module
+            ))
+            .with_hint(format!(
+                "if it sealed under `{0}` before, set `{0}` again and run `trestle up` (or \
+                 `{import_cmd}`); if the environment is new, `{rotate}`",
+                import.from
+            )));
+        };
+        let ring = Keyring::import(material.expose(), import.alias.as_deref())
+            .map_err(|e| Error::other(format!("importing `{}` for {key}: {e}", import.from)))?;
+        let resolved = Resolved {
+            env_target: env_target.clone(),
+            env: env.clone(),
+            var,
+            running: Vec::new(),
+        };
+        write(ctx, &resolved, None, &ring)?;
+        println!(
+            "imported `{}` as {}{} for {key} on {env_target}, once: from now on its keyring is \
+             used, and `{}` is no longer read",
+            import.from,
+            kek_id(&key.key, 1),
+            import
+                .alias
+                .as_ref()
+                .map(|a| format!(" (alias {a})"))
+                .unwrap_or_default(),
+            import.from
+        );
+        println!("{BACKUP_WARNING}");
+    }
+    Ok(())
 }
 
 /// Writes go to this machine's keychain, which a team's other machines don't share.
@@ -444,28 +556,35 @@ fn read_key(key: &KeyName) -> Result<SecretValue> {
 /// The value of the existing secret `var`: the environment's, the workspace's, else this
 /// process's environment.
 fn existing_secret(ctx: &Ctx, resolved: &Resolved, var: &str) -> Result<SecretValue> {
+    lookup_secret(ctx, &resolved.env_target, &resolved.env, var)?.ok_or_else(|| {
+        Error::other(format!(
+            "`{var}` is set neither on {} nor in this shell",
+            resolved.env_target
+        ))
+    })
+}
+
+/// [`existing_secret`], `None` when `var` is set nowhere. A var set to a secret that can't be
+/// read (a keychain entry gone) is an error, not `None`.
+fn lookup_secret(
+    ctx: &Ctx,
+    env_target: &Target,
+    env: &Environment,
+    var: &str,
+) -> Result<Option<SecretValue>> {
     super::var::check_key(var)?;
-    let ws = resolved.env_target.workspace(&ctx.store)?;
+    let ws = env_target.workspace(&ctx.store)?;
     let providers = SecretProviders::new()
         .with(EnvProvider)
         .with(ctx.secrets().clone());
-    let value = resolved
-        .env
-        .vars
-        .get(var)
-        .or_else(|| ws.vars.get(var))
-        .cloned();
+    let value = env.vars.get(var).or_else(|| ws.vars.get(var)).cloned();
     match value {
         Some(VarValue::Secret(r)) => providers
             .resolve(&r)
+            .map(Some)
             .map_err(|e| Error::other(format!("reading {var}: {e}"))),
-        Some(VarValue::Literal(v)) => Ok(SecretValue::new(v)),
-        None => EnvProvider.get(var).map_err(|_| {
-            Error::other(format!(
-                "`{var}` is set neither on {} nor in this shell",
-                resolved.env_target
-            ))
-        }),
+        Some(VarValue::Literal(v)) => Ok(Some(SecretValue::new(v))),
+        None => Ok(EnvProvider.get(var).ok()),
     }
 }
 
