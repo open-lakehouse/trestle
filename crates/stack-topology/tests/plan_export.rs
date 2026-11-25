@@ -22,6 +22,7 @@ const FIXTURES: &[&str] = &[
     "docs-uc-aws",
     "docs-uc-default",
     "egress",
+    "egress-host",
     "egress-mcp",
     "hosted",
     "platform-features",
@@ -86,6 +87,7 @@ const RENDERED: &[&str] = &[
     "docs-uc-aws",
     "docs-uc-default",
     "egress",
+    "egress-host",
     "egress-mcp",
     "uc-api-storage",
 ];

@@ -12,7 +12,7 @@
     "digest": "sha256:ccc86a06afc24906bb8b356c74569e1ab5b533e7e9311a7c8fdd22e4598c385c"
   },
   "recipe": {
-    "digest": "sha256:bf1d14c95c3b9974dbd6c0aaf5324fa3086cb4c7ac2d6dc5cba8dc86eef5d6f5"
+    "digest": "sha256:b6236c68d64725bcfa520bef772354a053212baafcb7734dbfabf5257a579af5"
   },
   "context": {
     "env_name": "lakehouse",

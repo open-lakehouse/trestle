@@ -18,7 +18,9 @@ pub mod role;
 pub use connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
 };
-pub use egress::{EgressRoute, EgressSelection, McpRoute, egress_url_var};
+pub use egress::{
+    DEFAULT_HOST_SOURCE_PORT, EgressRoute, EgressSelection, McpRoute, SecretSource, egress_url_var,
+};
 pub use endpoint::{Endpoint, InjectedCredential, Rewrite, RouteIntent, Scheme};
 pub use placement::{Placement, Vantage};
 pub use platform::{

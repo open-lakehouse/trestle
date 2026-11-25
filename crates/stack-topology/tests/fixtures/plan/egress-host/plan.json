@@ -1,0 +1,538 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:ccc86a06afc24906bb8b356c74569e1ab5b533e7e9311a7c8fdd22e4598c385c"
+  },
+  "recipe": {
+    "digest": "sha256:6ad5f1b52f5300c2e11d829ad95f37f6479d2cfe0e267ac55ed256843f34a3c1"
+  },
+  "context": {
+    "env_name": "lakehouse",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 9080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {},
+    "data_root": "./.data"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "egress-gateway",
+        "model": "envoy",
+        "kind": "egress",
+        "display_name": "Egress gateway",
+        "summary": "Reaches upstreams outside the environment and adds their credentials, so no caller holds them.",
+        "category": "gateway",
+        "role": "egress",
+        "placement": "container:egress-gateway",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 9080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "omnigent",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/omnigent",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "omnigent",
+            "consumers": [
+              "omnigent"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "omnigent",
+        "model": "omnigent",
+        "kind": "component",
+        "display_name": "Omnigent",
+        "summary": "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway or an upstream.",
+        "category": "agents",
+        "role": "agent_platform",
+        "placement": "container:omnigent",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@neon-workgraph",
+        "model": null,
+        "kind": "external",
+        "display_name": "workgraph",
+        "summary": "The `workgraph` function on the bound Neon branch.",
+        "category": null,
+        "role": "upstream",
+        "placement": "external:${WORKGRAPH_FUNCTION_URL}",
+        "cloud": "neon",
+        "cloud_name": "Neon",
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@upstream/api.search.example.com",
+        "model": null,
+        "kind": "external",
+        "display_name": "api.search.example.com",
+        "summary": "An upstream outside the environment, at https://api.search.example.com.",
+        "category": null,
+        "role": "upstream",
+        "placement": "external:https://api.search.example.com",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9080
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→omnigent:9080",
+        "from": "envoy",
+        "to": "omnigent",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→postgres:relational_db",
+        "from": "omnigent",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "omnigent"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→egress-gateway:egress",
+        "from": "omnigent",
+        "to": "egress-gateway",
+        "role": "egress",
+        "protocol": "HTTP",
+        "resources": [
+          "workgraph-planner",
+          "search"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:egress-gateway→@neon-workgraph:upstream",
+        "from": "egress-gateway",
+        "to": "@neon-workgraph",
+        "role": "upstream",
+        "protocol": "HTTPS",
+        "resources": [
+          "workgraph-planner"
+        ],
+        "auth": "injected"
+      },
+      {
+        "kind": "uses",
+        "key": "uses:egress-gateway→@upstream/api.search.example.com:upstream",
+        "from": "egress-gateway",
+        "to": "@upstream/api.search.example.com",
+        "role": "upstream",
+        "protocol": "HTTPS",
+        "resources": [
+          "search"
+        ],
+        "auth": "injected"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "egress-gateway",
+      "component": "egress-gateway",
+      "kind": "service"
+    },
+    {
+      "name": "secret-server",
+      "component": "egress-gateway",
+      "kind": "service"
+    },
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "omnigent",
+      "component": "omnigent",
+      "kind": "service"
+    },
+    {
+      "name": "omnigent-host",
+      "component": "omnigent",
+      "kind": "service"
+    }
+  ],
+  "services": {
+    "egress-gateway": [
+      {
+        "name": "egress-gateway",
+        "role": "egress",
+        "placement": {
+          "kind": "container",
+          "service": "egress-gateway"
+        },
+        "endpoints": [],
+        "depends_on": []
+      },
+      {
+        "name": "secret-server",
+        "role": "egress",
+        "placement": {
+          "kind": "container",
+          "service": "secret-server"
+        },
+        "endpoints": [],
+        "depends_on": []
+      }
+    ],
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "omnigent": [
+      {
+        "name": "omnigent",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent"
+        },
+        "endpoints": [
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 8000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit",
+            "route": {
+              "streaming": true
+            }
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/omnigent"
+      },
+      {
+        "name": "omnigent-host",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent-host"
+        },
+        "endpoints": [],
+        "depends_on": [
+          "omnigent"
+        ]
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 9080,
+        "routes": [
+          {
+            "prefix": "/omnigent",
+            "cluster": "omnigent",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "omnigent",
+        "host": "omnigent",
+        "port": 8000
+      }
+    ],
+    "admin_port": 9901,
+    "auth": null,
+    "tls": null,
+    "policy": null
+  },
+  "client": {
+    "host": {
+      "OMNIGENT_URL": "http://localhost:9080/omnigent"
+    },
+    "container": {
+      "OMNIGENT_URL": "http://envoy:10000/omnigent"
+    }
+  },
+  "secrets": [
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "help": "Anthropic API key, for Claude."
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "help": "OpenAI API key, for Codex."
+    },
+    {
+      "name": "SEARCH_API_KEY",
+      "required": true,
+      "help": "The credential the egress gateway adds to requests on route `search`."
+    },
+    {
+      "name": "WORKGRAPH_PLANNER_API_KEY",
+      "required": true,
+      "help": "The credential the egress gateway adds to requests on route `workgraph-planner`."
+    }
+  ],
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": true
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/secret-server.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/consumers/omnigent.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/.env/omnigent.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/databricks/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/databricks/databricks_token.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/mcp-registry.yaml",
+      "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "configure",
+      "id": "local-credentials",
+      "title": "Set the services' own credentials",
+      "instructions": "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service."
+    },
+    {
+      "order": 2,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
+    }
+  ]
+}

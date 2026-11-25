@@ -23,6 +23,12 @@
 //! egress module in the same way a route's do, so they too reach the secret server alone. A
 //! key's keyring is held by a variable the planner derives ([`keyring_var`]) and declares on the
 //! egress module only: the module never sees it.
+//!
+//! The secret server reads those variables from its launch environment, or, with the
+//! [host source](crate::SecretSource::Host), from a host endpoint the launcher runs
+//! ([`HostSource`]): then its only launch value is [`HOST_SOURCE_TOKEN_VAR`], the instance's
+//! path token on that endpoint, and the variables stay declared (the launcher resolves them for
+//! the endpoint) but reach no container.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,6 +58,13 @@ pub const SDS_DIR: &str = "/run/trestle-sds";
 pub const SDS_SOCKET_VAR: &str = "TRESTLE_SDS_SOCKET";
 /// The socket's file name in an SDS volume.
 const SDS_SOCKET: &str = "sds.sock";
+/// The secret server's launch variable for its host endpoint's path token, with the
+/// [host source](crate::SecretSource::Host): its only launch value.
+pub const HOST_SOURCE_TOKEN_VAR: &str = "SECRET_SERVER_HOST_TOKEN";
+/// The name the secret server reaches the host at. Docker Desktop, OrbStack and Colima resolve
+/// it to the host's loopback; on a Linux engine the service maps it to the bridge's gateway
+/// (`extra_hosts: host-gateway`).
+pub const HOST_SOURCE_HOST: &str = "host.docker.internal";
 /// The longest key name the secret server accepts (a KEK id `<key>@v<n>` must fit in 255
 /// bytes).
 pub const MAX_KEY_NAME_LEN: usize = 243;
@@ -92,9 +105,13 @@ pub struct EgressConfig {
     /// Every cluster outside the environment the routes reach: each route's upstream, then its
     /// OAuth2 token endpoint, in route order.
     pub clusters: Vec<EgressUpstream>,
-    /// The variables the secret server reads from its environment, once each: the routes'
-    /// secrets in route order, then the SDS consumers' in consumer order.
+    /// The variables the secret server serves, once each: the routes' secrets in route order,
+    /// then the SDS consumers' in consumer order. It reads them from its launch environment, or
+    /// with [`host`](Self::host), from the host endpoint.
     pub secrets: Vec<String>,
+    /// The host endpoint the secret server takes its values from, with the
+    /// [host source](crate::SecretSource::Host). `None`: its launch environment.
+    pub host: Option<HostSource>,
     /// The secret server's consumers: one SDS socket, and volume, each.
     pub sds_consumers: Vec<SdsConsumer>,
     /// The Envoy admin port (loopback only, never published).
@@ -105,7 +122,27 @@ pub struct EgressConfig {
     pub unresolved_upstreams: Vec<String>,
 }
 
+/// The host endpoint of the [host source](crate::SecretSource::Host).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostSource {
+    /// The port the endpoint listens on, on the host.
+    pub port: u16,
+    /// The base URL the secret server reaches it at: `http://host.docker.internal:<port>`.
+    pub url: String,
+    /// The launch variable holding the instance's path token ([`HOST_SOURCE_TOKEN_VAR`]).
+    pub token_env: String,
+}
+
 impl EgressConfig {
+    /// The variables the secret server's container is launched with: the token alone with a
+    /// host source, else every variable it serves.
+    pub fn launch_vars(&self) -> Vec<&str> {
+        match &self.host {
+            Some(host) => vec![host.token_env.as_str()],
+            None => self.secrets.iter().map(String::as_str).collect(),
+        }
+    }
+
     /// The routes' secrets, as the egress module declares them: each one required.
     pub(super) fn declared_route_secrets(&self) -> Vec<DeclaredSecret> {
         let mut vars: Vec<&str> = Vec::new();
@@ -506,10 +543,16 @@ pub(super) fn plan_egress(
                 .chain(r.token_endpoint.iter().map(|t| t.upstream.clone()))
         })
         .collect();
+    let host = selection.egress.host_source_port().map(|port| HostSource {
+        port,
+        url: format!("http://{HOST_SOURCE_HOST}:{port}"),
+        token_env: HOST_SOURCE_TOKEN_VAR.to_string(),
+    });
     Ok(Some(EgressConfig {
         module,
         clusters,
         secrets,
+        host,
         routes: planned,
         sds_consumers,
         admin_port: EGRESS_ADMIN_PORT,

@@ -12,7 +12,7 @@
     "digest": "sha256:ccc86a06afc24906bb8b356c74569e1ab5b533e7e9311a7c8fdd22e4598c385c"
   },
   "recipe": {
-    "digest": "sha256:c8ad283229df453c3b0c075f21eb5adf42d665fc582ee620f843c9bb4247e60c"
+    "digest": "sha256:1cc0731287494547ddd2b6f397ea5dd559961ca9572c6d3cf2c4f6132f715a3f"
   },
   "context": {
     "env_name": "hosted",
