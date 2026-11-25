@@ -9,10 +9,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use olai_stack_topology::DEFAULT_HOST_SOURCE_PORT;
+use olai_stack_topology::plan::egress::HOST_SOURCE_TOKEN_VAR;
 use olai_stack_topology::{
     DataModule, DeclaredSecret, EgressRoute, EgressSelection, InjectedCredential,
     MaterializedOutput, McpRoute, ModuleId, Placement, Plan, PlanCtx, PlanError, Provides,
-    RenderSpec, Role, SdsSecret, Secrets, Selection, ServiceSpec, baseline_catalog,
+    RenderSpec, Role, SdsSecret, SecretSource, Secrets, Selection, ServiceSpec, baseline_catalog,
 };
 
 const PLANNER_KEY: &str = "WORKGRAPH_PLANNER_API_KEY";
@@ -82,9 +84,15 @@ fn omnigent() -> Selection {
 fn selection(routes: Vec<EgressRoute>) -> Selection {
     let mut selection = omnigent();
     selection.egress = EgressSelection {
-        enabled: None,
         routes,
+        ..EgressSelection::default()
     };
+    selection
+}
+
+fn host_selection(routes: Vec<EgressRoute>) -> Selection {
+    let mut selection = selection(routes);
+    selection.egress.source = SecretSource::Host;
     selection
 }
 
@@ -444,6 +452,77 @@ fn egress_turned_on_without_routes_still_runs_the_gateway() {
     let plan = self::plan(&omnigent(), None).unwrap();
     assert!(plan.egress.is_none());
     assert!(!plan.stack_facts.has("egress-gateway"));
+}
+
+#[test]
+fn a_host_source_launches_the_secret_server_with_its_token_alone() {
+    let plan = plan(
+        &host_selection(vec![function_route(), upstream_route()]),
+        Some(branch()),
+    )
+    .unwrap();
+    let egress = plan.egress.as_ref().unwrap();
+    let host = egress.host.as_ref().unwrap();
+    assert_eq!(
+        host.url,
+        format!("http://host.docker.internal:{DEFAULT_HOST_SOURCE_PORT}")
+    );
+    assert_eq!(egress.launch_vars(), [HOST_SOURCE_TOKEN_VAR]);
+    // The route secrets stay declared: the launcher resolves them for its endpoint.
+    assert_eq!(egress.secrets, [PLANNER_KEY, SEARCH_KEY]);
+    let declared = plan.declared_secrets();
+    assert!(declared.iter().any(|s| s.name == PLANNER_KEY && s.required));
+
+    let out = plan.materialize().unwrap();
+    let fragment = yaml(file(&out, "modules/egress-gateway/compose.yaml"));
+    let server = &fragment["services"]["secret-server"];
+    let environment: Vec<&str> = server["environment"]
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    assert_eq!(environment, [HOST_SOURCE_TOKEN_VAR]);
+    assert_eq!(
+        server["extra_hosts"][0].as_str(),
+        Some("host.docker.internal:host-gateway")
+    );
+    assert!(server["ports"].is_null());
+    let config = yaml(file(&out, "modules/egress-gateway/secret-server.yaml"));
+    assert_eq!(config["source"]["kind"].as_str(), Some("host"));
+    assert_eq!(
+        config["source"]["url"].as_str(),
+        Some("http://host.docker.internal:7480")
+    );
+    assert_eq!(
+        config["source"]["token_env"].as_str(),
+        Some(HOST_SOURCE_TOKEN_VAR)
+    );
+    // Only the server's configuration names the route secrets now.
+    for f in &out.files {
+        for var in [PLANNER_KEY, SEARCH_KEY] {
+            if f.contents.contains(var) {
+                assert_eq!(f.path, "modules/egress-gateway/secret-server.yaml", "{var}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_host_port_is_configurable_and_env_stays_the_default() {
+    let mut selection = host_selection(vec![upstream_route()]);
+    selection.egress.host_port = Some(7999);
+    let plan = plan(&selection, Some(branch())).unwrap();
+    let host = plan.egress.as_ref().unwrap().host.as_ref().unwrap();
+    assert_eq!(host.url, "http://host.docker.internal:7999");
+
+    let (plan, out) = rendered(vec![upstream_route()]);
+    let egress = plan.egress.as_ref().unwrap();
+    assert!(egress.host.is_none());
+    assert_eq!(egress.launch_vars(), [SEARCH_KEY]);
+    let fragment = yaml(file(&out, "modules/egress-gateway/compose.yaml"));
+    assert!(fragment["services"]["secret-server"]["extra_hosts"].is_null());
+    assert!(!file(&out, "modules/egress-gateway/secret-server.yaml").contains("source"));
 }
 
 fn golden_dir() -> PathBuf {

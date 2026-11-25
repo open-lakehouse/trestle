@@ -12,7 +12,7 @@
     "digest": "sha256:ccc86a06afc24906bb8b356c74569e1ab5b533e7e9311a7c8fdd22e4598c385c"
   },
   "recipe": {
-    "digest": "sha256:3e3c19ad2706c809032c7248baed290c1eaf69f277e606e82b56598660571bdc"
+    "digest": "sha256:ab58474edf04375829f5f268a5ba9bff33557e8c6d1815656593dc2e3f80d245"
   },
   "context": {
     "env_name": "uc-docs",

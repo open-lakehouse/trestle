@@ -1,0 +1,11 @@
+# The egress routes `omnigent` may call: the egress gateway adds their credentials.
+# Written by the planner and merged over `modules/omnigent/compose.yaml`.
+services:
+  omnigent:
+    environment:
+      EGRESS_SEARCH_URL: "http://egress-gateway:10002/v1"
+      EGRESS_WORKGRAPH_PLANNER_URL: "http://egress-gateway:10001/mcp"
+  omnigent-host:
+    environment:
+      EGRESS_SEARCH_URL: "http://egress-gateway:10002/v1"
+      EGRESS_WORKGRAPH_PLANNER_URL: "http://egress-gateway:10001/mcp"

@@ -140,9 +140,11 @@ impl EnvManifest {
     /// [platform features](crate::Selection::platform); an older file's gateway settings and
     /// listed providers are migrated on read (see [`migrate_platform`]). Version 8 added
     /// egress routes ([`Selection::egress`](crate::Selection::egress)); an older file has none,
-    /// so it reads unchanged.
+    /// so it reads unchanged. Version 9 added the secret server's
+    /// [source](crate::EgressSelection::source); an older file has none (the launch
+    /// environment), so it reads unchanged.
     pub fn current_version() -> u32 {
-        8
+        9
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -1018,6 +1020,16 @@ mod tests {
         assert!(m.selection.egress.is_empty());
         assert!(!m.selection.egress.is_enabled());
         assert!(!m.to_toml().unwrap().contains("egress"));
+    }
+
+    #[test]
+    fn a_v9_manifest_round_trips_a_host_source() {
+        let text = "version = 9\n[selection]\nmodules = [\"omnigent\"]\n[selection.egress]\nsource = \"host\"\nhost_port = 7481\n";
+        let m = EnvManifest::from_toml(text).unwrap();
+        assert_eq!(m.selection.egress.host_source_port(), Some(7481));
+        let written = m.to_toml().unwrap();
+        assert!(written.contains("source = \"host\""), "{written}");
+        assert_eq!(EnvManifest::from_toml(&written).unwrap(), m);
     }
 
     #[test]

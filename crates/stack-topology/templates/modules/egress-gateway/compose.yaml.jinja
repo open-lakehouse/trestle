@@ -46,7 +46,14 @@ services:
     configs:
       - source: secret_server_config
         target: /etc/trestle/secret-server.yaml
-{%- if egress.secrets %}
+{%- if egress.host %}
+    # The values come from the launcher's host endpoint: the only launch value is this
+    # instance's path token on it, by name only.
+    environment:
+      {{ egress.host.token_env }}:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+{%- elif egress.secrets %}
     # The routes' credentials and the secrets modules read over SDS, by name only: the launcher
     # supplies the values. No other service in the environment lists them.
     environment:
