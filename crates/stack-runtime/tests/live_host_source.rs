@@ -4,16 +4,14 @@
 //! with no container recreated or restarted:
 //! `cargo test -p olai-stack-runtime --features testing,host-endpoint --test live_host_source -- --ignored`.
 //!
-//! The secret server image comes from `SECRET_SERVER_IMAGE`; when that is unset, the test
-//! builds `crates/secret-server/Dockerfile` (with `$CARGO_HOME/config.toml` as the
-//! `cargo-config` build secret when there is one), since the host source is newer than the
-//! pinned image. The upstream's certificate is signed by a CA the test makes, mounted over the
+//! `SECRET_SERVER_IMAGE` overrides the catalog's secret server image (e.g. one built from
+//! `crates/secret-server/Dockerfile`); the pinned one reads the host source. The upstream's certificate is signed by a CA the test makes, mounted over the
 //! egress gateway's system store by a test-only `compose.override.yaml`. The state directory
 //! sits under the build's tmp dir, because Docker VMs such as Colima only share the user's
 //! home directory with containers.
 #![cfg(all(feature = "testing", feature = "host-endpoint"))]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -64,34 +62,6 @@ fn token(label: &str) -> String {
         .unwrap()
         .as_nanos();
     format!("{label}SENTINEL{nanos:x}")
-}
-
-/// The secret server image: `SECRET_SERVER_IMAGE`, or one built from the Dockerfile.
-fn server_image() -> String {
-    if let Ok(image) = std::env::var("SECRET_SERVER_IMAGE") {
-        return image;
-    }
-    let reference = "olai-secret-server:host-source-it".to_string();
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut build = Command::new("docker");
-    build.arg("build").arg("-q").arg("-t").arg(&reference);
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")));
-    if let Some(config) = cargo_home.map(|h| h.join("config.toml"))
-        && config.exists()
-    {
-        build
-            .arg("--secret")
-            .arg(format!("id=cargo-config,src={}", config.display()));
-    }
-    build
-        .arg("-f")
-        .arg(root.join("crates/secret-server/Dockerfile"))
-        .arg(&root);
-    let status = build.status().expect("docker build runs");
-    assert!(status.success(), "building the secret server image failed");
-    reference
 }
 
 /// A free port on the loopback, for the endpoint.
@@ -301,9 +271,8 @@ fn containers_holding(project: &str, value: &str) -> Vec<String> {
 // Multi-threaded: the endpoint runs in this process, and the checks block their thread while
 // they poll the route.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a Docker daemon, builds the secret server image, and pulls envoy, echo and curl"]
+#[ignore = "needs a Docker daemon, and pulls the secret server, envoy, echo and curl"]
 async fn a_rotation_at_the_host_reaches_the_gateway_with_no_container_recreated() {
-    let image = server_image();
     let state = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let certs = state.path().join("certs");
     write_certs(&certs);
@@ -315,10 +284,12 @@ async fn a_rotation_at_the_host_reaches_the_gateway_with_no_container_recreated(
     selection.gateway.enabled = false;
     selection.egress.source = SecretSource::Host;
     selection.egress.host_port = Some(port);
-    selection.knob_overrides.insert(
-        ModuleId::from("egress-gateway"),
-        [("secret_server_image".to_string(), image)].into(),
-    );
+    if let Ok(image) = std::env::var("SECRET_SERVER_IMAGE") {
+        selection.knob_overrides.insert(
+            ModuleId::from("egress-gateway"),
+            [("secret_server_image".to_string(), image)].into(),
+        );
+    }
     selection.egress.routes.push(EgressRoute {
         name: ROUTE.into(),
         function: None,
