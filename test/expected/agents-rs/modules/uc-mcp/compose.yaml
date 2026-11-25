@@ -1,7 +1,7 @@
 # Unity Catalog MCP: mangrove's `uc mcp serve` over Streamable HTTP
 services:
   uc-mcp:
-    image: ghcr.io/open-lakehouse/mangrove:0.0.23
+    image: ghcr.io/open-lakehouse/mangrove:0.0.24
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/uc"]
     # No token: the stack's Unity Catalog server is anonymous, in a container or as a function.

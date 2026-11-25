@@ -58,7 +58,7 @@ use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
 use crate::catalog::images;
 use crate::catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, DeclaredSecret, EdgeAuth,
-    HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId,
+    HelperService, ImpersonatedHost, KeyImport, Knob, KnobKind, KnobRejection, Module, ModuleId,
     OutsideService, Provides, PythonClient, Readiness, ReadyGate, RenderSpec, ResolvedKnobs,
     ResourceDemand, StackFacts, UrlPart,
 };
@@ -2115,25 +2115,44 @@ impl Module for UnityCatalog {
     }
 }
 
-/// The configuration mangrove's Unity Catalog server runs with wherever it runs: mounted in its
-/// container, and the `UC_SERVER_CONFIG_YAML` a Neon Function is deployed with.
+/// The configuration mangrove's Unity Catalog server runs with wherever it runs, before its
+/// placement's `encryption` block: mounted in its container, and the `UC_SERVER_CONFIG_YAML` a
+/// Neon Function is deployed with.
 const UNITY_CATALOG_RS_CONFIG: &str =
     include_str!("../../templates/modules/unity-catalog-rs/uc-server.yaml");
 /// What the container adds to [`UNITY_CATALOG_RS_CONFIG`]: where it listens, and its database.
 const UNITY_CATALOG_RS_LOCAL: &str =
     include_str!("../../templates/modules/unity-catalog-rs/server.local.yaml");
-/// The variable mangrove's server reads its key-encryption key from.
+/// The container's `encryption`: through the secret server's key service.
+const UNITY_CATALOG_RS_KEY_SERVICE: &str =
+    include_str!("../../templates/modules/unity-catalog-rs/encryption.key-service.yaml");
+/// The function's `encryption`: a local key-encryption key, from [`UNITY_CATALOG_RS_KEK`].
+const UNITY_CATALOG_RS_LOCAL_KEK: &str =
+    include_str!("../../templates/modules/unity-catalog-rs/encryption.local.yaml");
+/// The variable mangrove's server reads its key-encryption key from as a function, and the one
+/// a container's keyring is imported from.
 const UNITY_CATALOG_RS_KEK: &str = "UC_SERVER_KEK";
+/// The key the container seals under through the key service.
+const UNITY_CATALOG_RS_KEY: &str = "server-kek";
+/// The id the server sealed under with [`UNITY_CATALOG_RS_KEK`], kept as an alias of the
+/// keyring's version 1.
+const UNITY_CATALOG_RS_KEK_ID: &str = "kek-1";
 
 /// `unity-catalog-rs` — mangrove's Rust Unity Catalog server, another implementation of
 /// [`UNITY_CATALOG_API`]. It keeps the OSS server's service name, port and REST path, so
 /// consumers reach either one the same way.
 ///
-/// One configuration document ([`UNITY_CATALOG_RS_CONFIG`]) serves both placements. The
-/// container mounts it, with the listen address and the database added. Run as a Neon
-/// Function, the deployment sets it as `UC_SERVER_CONFIG_YAML`, and the branch supplies the
-/// database. The key-encryption key is never rendered: the server reads `UC_SERVER_KEK` from
-/// its environment, which Compose passes through from the process that starts it.
+/// Both placements run one configuration document ([`UNITY_CATALOG_RS_CONFIG`]), and differ
+/// in how the server seals what it stores:
+///
+/// - The container mounts it with the listen address and the database added, and seals
+///   through the secret server's key service, under the keyring of its key `server-kek`
+///   ([`Provides::keys`]). It holds no key-encryption key: the socket and the key's name are
+///   all it gets. An environment that ran it with `UC_SERVER_KEK` has that key imported as
+///   version 1, aliased `kek-1` ([`Provides::key_imports`]).
+/// - Run as a Neon Function, which can't reach the socket, the deployment sets it as
+///   `UC_SERVER_CONFIG_YAML` with a local key-encryption key read from `UC_SERVER_KEK`
+///   ([`Provides::function_secrets`]), and the branch supplies the database.
 fn unity_catalog_rs() -> Arc<dyn Module> {
     let mut provides = Provides {
         helpers: vec![HelperService::init("unitycatalog-migrate")],
@@ -2141,18 +2160,16 @@ fn unity_catalog_rs() -> Arc<dyn Module> {
         function: Some("unitycatalog".into()),
         function_env: [(
             "UC_SERVER_CONFIG_YAML".to_string(),
-            UNITY_CATALOG_RS_CONFIG.to_string(),
+            format!("{UNITY_CATALOG_RS_CONFIG}\n{UNITY_CATALOG_RS_LOCAL_KEK}"),
         )]
         .into(),
         function_secrets: vec![UNITY_CATALOG_RS_KEK.into()],
-        secrets: vec![
-            DeclaredSecret::required(
-                UNITY_CATALOG_RS_KEK,
-                "Seals the credentials Unity Catalog stores: 32 random bytes, base64. Generate \
-                 it once and keep it: credentials sealed under one can't be read with another.",
-            )
-            .minted(),
-        ],
+        keys: vec![UNITY_CATALOG_RS_KEY.into()],
+        key_imports: [(
+            UNITY_CATALOG_RS_KEY.to_string(),
+            KeyImport::new(UNITY_CATALOG_RS_KEK, UNITY_CATALOG_RS_KEK_ID),
+        )]
+        .into(),
         api: Some(UNITY_CATALOG_API.into()),
         // Its authorizer asks a policy decision point over olai-auth's API, for callers it
         // authenticated itself.
@@ -2166,7 +2183,7 @@ fn unity_catalog_rs() -> Arc<dyn Module> {
         deploy: vec![DeployStepSpec::new(
             "kek",
             DeployPhase::Configure,
-            "Set Unity Catalog's key-encryption key",
+            "Give Unity Catalog's key a keyring",
             include_str!("../../templates/modules/unity-catalog-rs/kek.deploy.md.jinja"),
         )],
         ..Provides::default()
@@ -2223,7 +2240,10 @@ fn unity_catalog_rs() -> Arc<dyn Module> {
                 config_file(
                     "config.yaml",
                     "unity_catalog_rs_config",
-                    &format!("{UNITY_CATALOG_RS_LOCAL}\n{UNITY_CATALOG_RS_CONFIG}"),
+                    &format!(
+                        "{UNITY_CATALOG_RS_LOCAL}\n{UNITY_CATALOG_RS_CONFIG}\n\
+                         {UNITY_CATALOG_RS_KEY_SERVICE}"
+                    ),
                 ),
                 sensitive_file(
                     ".env/unitycatalog.env",

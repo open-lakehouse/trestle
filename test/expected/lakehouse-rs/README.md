@@ -9,20 +9,21 @@ runs from anywhere and is safe to re-run. The services, their routes and address
 ```mermaid
 flowchart LR
     n0(["<b>Clients</b>"]):::clients
-    n1{{"<b>Envoy</b><br/>gateway"}}:::gateway
-    n2["<b>Postgres</b><br/>relational db"]:::component
-    n3["<b>Unity Catalog (Rust)</b><br/>data catalog"]:::component
-    n4["<b>RustFS</b><br/>object store"]:::component
-    n5["<b>MLflow</b><br/>experiment tracking"]:::component
-    n0 -->|":9080"| n1
-    n0 -->|":9100"| n1
-    n1 -->|"/api/2.1/unity-catalog"| n3
-    n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n5
-    n1 -->|"S3 + STS"| n4
-    n3 -->|"PostgreSQL: unitycatalog"| n2
-    n5 -->|"PostgreSQL: mlflow"| n2
-    n5 -->|"S3: mlflow"| n4
-    n5 -->|"HTTP"| n3
+    n1{{"<b>Egress gateway</b><br/>egress"}}:::gateway
+    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway
+    n3["<b>Postgres</b><br/>relational db"]:::component
+    n4["<b>Unity Catalog (Rust)</b><br/>data catalog"]:::component
+    n5["<b>RustFS</b><br/>object store"]:::component
+    n6["<b>MLflow</b><br/>experiment tracking"]:::component
+    n0 -->|":9080"| n2
+    n0 -->|":9100"| n2
+    n2 -->|"/api/2.1/unity-catalog"| n4
+    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n6
+    n2 -->|"S3 + STS"| n5
+    n4 -->|"PostgreSQL: unitycatalog"| n3
+    n6 -->|"PostgreSQL: mlflow"| n3
+    n6 -->|"S3: mlflow"| n5
+    n6 -->|"HTTP"| n4
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb
@@ -31,17 +32,32 @@ flowchart LR
 
 ## Configure
 
-### 1. Set Unity Catalog's key-encryption key (`unity-catalog-rs`)
+### 1. Give Unity Catalog's key a keyring (`unity-catalog-rs`)
 
-Unity Catalog seals the credentials it stores with a key-encryption key, read from
-`UC_SERVER_KEK` (32 bytes, base64) in the environment of the process that starts the stack.
-Compose passes it through to the server; it is never written into this directory, and without
-it the server refuses to start. Generate one once and keep it: credentials sealed under it
-can't be read with another.
+Unity Catalog seals the credentials it stores through the secret server's key service, under
+the keyring of its key `server-kek`. The keyring lives in this machine's keychain and reaches
+only the secret server: the Unity Catalog container gets the socket and the key's name, never a
+key, and nothing of it is written into this directory. Without a keyring the stack doesn't
+start.
+
+A new environment gets one with a random first version:
 
 ```sh
-export UC_SERVER_KEK="$(openssl rand -base64 32)"
+trestle key rotate <ws>/<env> unity-catalog-rs/server-kek
 ```
+
+An environment whose server sealed under `UC_SERVER_KEK` before keeps that key as version 1,
+under its old id `kek-1`, so what it sealed still opens. `trestle up` imports it once by itself
+when `UC_SERVER_KEK` is set (on the environment, its workspace, or in the shell), or:
+
+```sh
+trestle key import <ws>/<env> unity-catalog-rs/server-kek --from UC_SERVER_KEK --alias kek-1
+```
+
+`trestle key rotate` adds a version while the server runs; `POST /api/admin/v1/encryption/rewrap`
+moves what is sealed onto it, `GET /api/admin/v1/encryption/kek-usage` shows what is left, and
+`trestle key retire … --below <n> --confirm-swept` stops the old versions opening. The keychain
+holds the only copy of the keyring: without it, nothing sealed under it can be read.
 
 ### 2. Set the AI Gateway's key passphrase (`mlflow`)
 

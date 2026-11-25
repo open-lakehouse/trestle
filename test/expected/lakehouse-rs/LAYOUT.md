@@ -17,6 +17,8 @@
 
 | Module | Service | Role | Placement | Endpoints |
 | --- | --- | --- | --- | --- |
+| `egress-gateway` | `egress-gateway` | `egress` | container `egress-gateway` | — |
+| `egress-gateway` | `secret-server` | `egress` | container `secret-server` | — |
 | `envoy` | `envoy` | `gateway` | container `envoy` | http:10000 |
 | `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, tracking_v3:5000, tracking_v4:5000, otel:5000, ai_gateway:5000, ui:5000 |
 | `postgres` | `db` | `relational_db` | container `db` | sql:5432 |

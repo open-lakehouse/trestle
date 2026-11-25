@@ -199,6 +199,13 @@ pub struct Provides {
     /// [`Module::keys_in`] narrows the list by knobs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<String>,
+    /// For a key of [`keys`](Self::keys) whose module sealed its data under a key it held
+    /// itself before (a key-encryption key in a launch variable), where that key comes from:
+    /// when an environment has no keyring for the key yet, its first version is imported from
+    /// that variable, under the alias the old key had, so what it sealed still opens. Keyed by
+    /// the key's name. `trestle up` imports it once; after that the keyring is all there is.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub key_imports: BTreeMap<String, KeyImport>,
     /// For a module hosted as a function: the resource kinds it demands as a container
     /// (`relational_db`, …), which the function finds where it is deployed (its branch's
     /// Postgres) rather than in the stack. The planner sets it on the
@@ -248,6 +255,28 @@ pub struct Provides {
     /// [`catalog::deploy`]: crate::catalog::deploy
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deploy: Vec<DeployStepSpec>,
+}
+
+/// Where the first version of a module's key comes from, for data the module sealed before it
+/// sealed through the key service (see [`Provides::key_imports`]): names only, never a value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyImport {
+    /// The variable that held the key, e.g. `"EXAMPLE_SERVER_KEK"` (32 bytes, base64).
+    pub from: String,
+    /// The id the module sealed under with it, kept as an alias of version 1 (e.g. `"kek-1"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+}
+
+impl KeyImport {
+    /// The key held by the variable `from`, which sealed under the id `alias`.
+    pub fn new(from: impl Into<String>, alias: impl Into<String>) -> Self {
+        Self {
+            from: from.into(),
+            alias: Some(alias.into()),
+        }
+    }
 }
 
 /// A secret a module's containers read over SDS (see [`Provides::sds_secrets`]): names only,

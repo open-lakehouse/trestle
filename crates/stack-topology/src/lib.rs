@@ -101,10 +101,10 @@ pub use catalog::credentials::{
 pub use catalog::deploy::{DeployCtx, DeployPhase, DeployStepSpec, RenderedStep};
 pub use catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, DeclaredSecret, EdgeAuth,
-    ExtraResource, GatewayTls, HelperKind, HelperService, HostedFunction, ImpersonatedHost, Knob,
-    KnobKind, KnobRejection, MeshNetwork, Module, ModuleId, OutsideService, PortDecl, PortMapping,
-    Provides, PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec, ResolvedKnobs,
-    ResourceDemand, SdsSecret, StackFacts, TemplateError, UrlPart, is_model_ref,
+    ExtraResource, GatewayTls, HelperKind, HelperService, HostedFunction, ImpersonatedHost,
+    KeyImport, Knob, KnobKind, KnobRejection, MeshNetwork, Module, ModuleId, OutsideService,
+    PortDecl, PortMapping, Provides, PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec,
+    ResolvedKnobs, ResourceDemand, SdsSecret, StackFacts, TemplateError, UrlPart, is_model_ref,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,

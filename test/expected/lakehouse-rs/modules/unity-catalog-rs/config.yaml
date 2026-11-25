@@ -7,11 +7,17 @@ backend:
   url: { env: DATABASE_URL }
 
 # What mangrove's Unity Catalog server runs with wherever it runs: this file in a container,
-# or `UC_SERVER_CONFIG_YAML` for a Neon Function. API-only, and anonymous until the services
-# verify callers' tokens. The key-encryption key is read from `UC_SERVER_KEK` when the server
-# starts, so it is never written here. Without it the server refuses to start; there is no
-# fallback key.
+# or `UC_SERVER_CONFIG_YAML` for a Neon Function, each followed by its placement's
+# `encryption` block. API-only, and anonymous until the services verify callers' tokens.
 ui: { serve: false }
 auth: { mode: anonymous }
+
+# In a container: the secret server's key service wraps and unwraps the data keys, under the
+# keyring it alone holds (`trestle key`). The server never sees a key-encryption key, only the
+# socket (`TRESTLE_SDS_SOCKET`) and the key's name (`TRESTLE_KEY_SERVER_KEK`). Values sealed
+# under an imported `UC_SERVER_KEK` open through its alias, `kek-1`.
 encryption:
-  active: { id: kek-1, key: { env: UC_SERVER_KEK } }
+  provider:
+    key_service:
+      socket: { env: TRESTLE_SDS_SOCKET }
+      key: { env: TRESTLE_KEY_SERVER_KEK }

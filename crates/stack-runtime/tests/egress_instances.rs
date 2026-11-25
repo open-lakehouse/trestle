@@ -667,6 +667,133 @@ async fn a_keyring_rotation_recreates_the_secret_server_alone() {
     assert_no_key_material(&recreated.dir);
 }
 
+// The catalog's `unity-catalog-rs`: it seals through the key service, so its keyring reaches
+// the secret server alone, and the key-encryption key it held before reaches no container and
+// no file, even when the environment still sets it.
+
+/// The variable the planner derives for `unity-catalog-rs`'s key `server-kek`.
+const UC_KEYRING_VAR: &str = "TRESTLE_KEYRING_UNITY_CATALOG_RS__SERVER_KEK";
+/// The variable `unity-catalog-rs` read its key-encryption key from before.
+const UC_OLD_KEK: &str = "UC_SERVER_KEK";
+/// The old key-encryption key's value.
+const UC_OLD_KEK_SENTINEL: &str = "ucOldKekSENTINEL-0123456789abcdef";
+
+/// The old key-encryption key, under the provider name `old`.
+struct OldKek;
+
+impl SecretProvider for OldKek {
+    fn name(&self) -> &str {
+        "old"
+    }
+
+    fn get(&self, _key: &str) -> Result<SecretValue, SecretError> {
+        Ok(SecretValue::new(UC_OLD_KEK_SENTINEL))
+    }
+}
+
+#[tokio::test]
+async fn unity_catalog_rs_gets_its_key_service_and_never_the_old_kek() {
+    let f = fixture();
+    let instances = Instances::new(Arc::clone(&f.store), f.engine.clone(), f._dir.path())
+        .with_providers(
+            SecretProviders::new()
+                .with(f.secret.clone())
+                .with(OldKek)
+                .with(NoEnv),
+        )
+        .without_port_probe();
+    *f.secret.0.lock().unwrap() = keyring(&[KEY_V1]).to_secret().expose().to_owned();
+    let ws = f.store.create_workspace("demo", false).unwrap();
+    let mut selection = Selection::modules(["unity-catalog-rs"]);
+    selection.gateway.enabled = false;
+    let env = f
+        .store
+        .create_environment(
+            &ws.id,
+            "dev",
+            Draft::new(EnvManifest::new(selection, PlanCtx::default())),
+        )
+        .unwrap();
+    f.store.commit_draft(&env.id).unwrap();
+    let mut vars = VarSet::new();
+    vars.set(
+        UC_KEYRING_VAR,
+        VarValue::Secret(SecretRef {
+            provider: "rotating".into(),
+            key: "route".into(),
+        }),
+    );
+    // An environment that ran it on a local key keeps the variable; nothing reads it now.
+    vars.set(
+        UC_OLD_KEK,
+        VarValue::Secret(SecretRef {
+            provider: "old".into(),
+            key: "kek".into(),
+        }),
+    );
+    f.store.set_environment_vars(&env.id, &vars).unwrap();
+    let id = f.store.create_instance(&env.id, 1).unwrap().id;
+    f.engine.script(
+        "demo_dev_r1",
+        [
+            (EGRESS_SERVICE, Health::Healthy),
+            (SECRET_SERVER_SERVICE, Health::None),
+            ("unitycatalog", Health::Healthy),
+        ],
+    );
+
+    let started = instances.start(&id).await.unwrap();
+    let launched = last_env(&f.engine, false);
+    assert_eq!(
+        Keyring::from_json(&launched[UC_KEYRING_VAR]).unwrap(),
+        keyring(&[KEY_V1])
+    );
+    // Compose's process gets the environment's variables; a container only those its service
+    // names (below, none names the old KEK), so it reaches no container.
+    assert_eq!(
+        launched.get(UC_OLD_KEK).map(String::as_str),
+        Some(UC_OLD_KEK_SENTINEL)
+    );
+    assert_no_key_material(&started.dir);
+
+    let mut files = Vec::new();
+    walk(&started.dir, &mut files);
+    let dir = started.dir.display().to_string();
+    let mut referenced_by = Vec::new();
+    for (path, text) in &files {
+        assert!(!text.contains(UC_OLD_KEK_SENTINEL), "the old KEK in {path}");
+        let relative = path.strip_prefix(&dir).unwrap().trim_start_matches('/');
+        if relative.ends_with(".yaml") && text.contains("services:") {
+            let doc: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+            if let Some(services) = doc["services"].as_mapping() {
+                for (name, service) in services {
+                    let environment = &service["environment"];
+                    assert!(
+                        environment.get(UC_OLD_KEK).is_none(),
+                        "{relative}: {name:?} reads {UC_OLD_KEK}"
+                    );
+                    if environment.get(UC_KEYRING_VAR).is_some() {
+                        referenced_by.push(name.as_str().unwrap().to_owned());
+                    }
+                }
+            }
+        }
+        if relative == "modules/egress-gateway/consumers/unity-catalog-rs.yaml" {
+            let overlay: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+            let server = &overlay["services"]["unitycatalog"];
+            assert_eq!(
+                server["environment"]["TRESTLE_KEY_SERVER_KEK"].as_str(),
+                Some("server-kek")
+            );
+            assert_eq!(
+                server["environment"]["TRESTLE_SDS_SOCKET"].as_str(),
+                Some("/run/trestle-sds/sds.sock")
+            );
+        }
+    }
+    assert_eq!(referenced_by, [SECRET_SERVER_SERVICE]);
+}
+
 // The host source: the secret server's only launch value is a path token, and the variables
 // it serves are registered with the launcher's endpoint instead.
 

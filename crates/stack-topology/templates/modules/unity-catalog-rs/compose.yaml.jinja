@@ -16,8 +16,6 @@ services:
     env_file:
       - path: ./modules/unity-catalog-rs/.env/unitycatalog.env
         format: raw
-    environment:
-      UC_SERVER_KEK:
     configs:
       - source: unity_catalog_rs_config
         target: /etc/uc-server/config.yaml
@@ -36,10 +34,9 @@ services:
     env_file:
       - path: ./modules/unity-catalog-rs/.env/unitycatalog.env
         format: raw
-    environment:
-      # The key-encryption key, passed through from the process that starts Compose (a bare
-      # name takes its value, or stays unset): never written into the rendered stack.
-      UC_SERVER_KEK:
+    # It seals through the secret server's key service: the planner's overlay mounts the socket
+    # and sets `TRESTLE_SDS_SOCKET` and `TRESTLE_KEY_SERVER_KEK`. No key-encryption key reaches
+    # this container.
     configs:
       - source: unity_catalog_rs_config
         target: /etc/uc-server/config.yaml

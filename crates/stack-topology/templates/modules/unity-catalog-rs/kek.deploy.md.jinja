@@ -1,9 +1,24 @@
-Unity Catalog seals the credentials it stores with a key-encryption key, read from
-`UC_SERVER_KEK` (32 bytes, base64) in the environment of the process that starts the stack.
-Compose passes it through to the server; it is never written into this directory, and without
-it the server refuses to start. Generate one once and keep it: credentials sealed under it
-can't be read with another.
+Unity Catalog seals the credentials it stores through the secret server's key service, under
+the keyring of its key `server-kek`. The keyring lives in this machine's keychain and reaches
+only the secret server: the Unity Catalog container gets the socket and the key's name, never a
+key, and nothing of it is written into this directory. Without a keyring the stack doesn't
+start.
+
+A new environment gets one with a random first version:
 
 ```sh
-export UC_SERVER_KEK="$(openssl rand -base64 32)"
+trestle key rotate <ws>/<env> unity-catalog-rs/server-kek
 ```
+
+An environment whose server sealed under `UC_SERVER_KEK` before keeps that key as version 1,
+under its old id `kek-1`, so what it sealed still opens. `trestle up` imports it once by itself
+when `UC_SERVER_KEK` is set (on the environment, its workspace, or in the shell), or:
+
+```sh
+trestle key import <ws>/<env> unity-catalog-rs/server-kek --from UC_SERVER_KEK --alias kek-1
+```
+
+`trestle key rotate` adds a version while the server runs; `POST /api/admin/v1/encryption/rewrap`
+moves what is sealed onto it, `GET /api/admin/v1/encryption/kek-usage` shows what is left, and
+`trestle key retire … --below <n> --confirm-swept` stops the old versions opening. The keychain
+holds the only copy of the keyring: without it, nothing sealed under it can be read.

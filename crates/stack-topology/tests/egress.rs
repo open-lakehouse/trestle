@@ -12,7 +12,7 @@ use std::sync::Arc;
 use olai_stack_topology::DEFAULT_HOST_SOURCE_PORT;
 use olai_stack_topology::plan::egress::HOST_SOURCE_TOKEN_VAR;
 use olai_stack_topology::{
-    DataModule, DeclaredSecret, EgressRoute, EgressSelection, InjectedCredential,
+    DataModule, DeclaredSecret, EgressRoute, EgressSelection, InjectedCredential, KeyImport,
     MaterializedOutput, McpRoute, ModuleId, Placement, Plan, PlanCtx, PlanError, Provides,
     RenderSpec, Role, SdsSecret, SecretSource, Secrets, Selection, ServiceSpec, baseline_catalog,
 };
@@ -1333,4 +1333,56 @@ fn unusable_keys_are_plan_errors() {
     // The longest name the secret server accepts plans.
     let longest = "k".repeat(243);
     sds_plan(keys_module(&[longest.as_str()]), vec![]).unwrap();
+}
+
+#[test]
+fn a_keys_import_rides_on_the_served_key() {
+    let mut module = keys_module(&["server-kek"]);
+    module.provides.key_imports.insert(
+        "server-kek".into(),
+        KeyImport::new("SDS_APP_OLD_KEK", "kek-1"),
+    );
+    let plan = sds_plan(module, vec![]).unwrap();
+    let egress = plan.egress.as_ref().unwrap();
+    let imports: Vec<_> = egress.keys().map(|(_, k)| k.import.clone()).collect();
+    assert_eq!(imports, [Some(KeyImport::new("SDS_APP_OLD_KEK", "kek-1"))]);
+    // A key without one has none.
+    let plan = sds_plan(keys_module(&["server-kek"]), vec![]).unwrap();
+    assert!(plan.egress.unwrap().keys().all(|(_, k)| k.import.is_none()));
+}
+
+#[test]
+fn unusable_key_imports_are_plan_errors() {
+    let cases: [(&str, KeyImport, &str); 4] = [
+        (
+            "other-kek",
+            KeyImport::new("SDS_APP_OLD_KEK", "kek-1"),
+            "isn't one of the module's keys",
+        ),
+        (
+            "server-kek",
+            KeyImport::new("9-NOT A VAR", "kek-1"),
+            "not a variable name",
+        ),
+        (
+            "server-kek",
+            KeyImport::new("SDS_APP_OLD_KEK", "server-kek@v2"),
+            "`<key>@v<n>`",
+        ),
+        (
+            "server-kek",
+            KeyImport::new("SDS_APP_OLD_KEK", ""),
+            "1 to 255 bytes",
+        ),
+    ];
+    for (key, import, reason) in cases {
+        let mut module = keys_module(&["server-kek"]);
+        module.provides.key_imports.insert(key.into(), import);
+        let err = sds_plan(module, vec![]).unwrap_err();
+        assert!(
+            matches!(&err, PlanError::InvalidModuleKey { module, .. } if module.as_str() == "sds-app"),
+            "{err}"
+        );
+        assert!(err.to_string().contains(reason), "{err}");
+    }
 }

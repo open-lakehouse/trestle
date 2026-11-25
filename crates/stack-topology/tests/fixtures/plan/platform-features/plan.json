@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:db0bbb1140eaa00b79f9f17c840bbb73bfd0c864b39d0623ae07cfe3576e0f91"
+    "digest": "sha256:3d84ff9765f259920fdeee66b25cb54060d74657d7f1d91c3ff4809014693ae7"
   },
   "recipe": {
     "digest": "sha256:4c6eac7dd507ec78fc5f529540292c54f5fc2711ec2a9f426b46fb6dffc6eac2"
@@ -52,6 +52,21 @@
         "category": "gateway",
         "role": "auth",
         "placement": "container:authelia",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "egress-gateway",
+        "model": "envoy",
+        "kind": "egress",
+        "display_name": "Egress gateway",
+        "summary": "Reaches upstreams outside the environment and adds their credentials, so no caller holds them.",
+        "category": "gateway",
+        "role": "egress",
+        "placement": "container:egress-gateway",
         "cloud": null,
         "surfaces": [],
         "offers": [],
@@ -476,6 +491,16 @@
       "kind": "service"
     },
     {
+      "name": "egress-gateway",
+      "component": "egress-gateway",
+      "kind": "service"
+    },
+    {
+      "name": "secret-server",
+      "component": "egress-gateway",
+      "kind": "service"
+    },
+    {
       "name": "envoy",
       "component": "envoy",
       "kind": "service"
@@ -561,6 +586,28 @@
             "rewrite": "inherit"
           }
         ],
+        "depends_on": []
+      }
+    ],
+    "egress-gateway": [
+      {
+        "name": "egress-gateway",
+        "role": "egress",
+        "placement": {
+          "kind": "container",
+          "service": "egress-gateway"
+        },
+        "endpoints": [],
+        "depends_on": []
+      },
+      {
+        "name": "secret-server",
+        "role": "egress",
+        "placement": {
+          "kind": "container",
+          "service": "secret-server"
+        },
+        "endpoints": [],
         "depends_on": []
       }
     ],
@@ -1104,10 +1151,9 @@
       "help": "OpenAI API key, for `openai:` models."
     },
     {
-      "name": "UC_SERVER_KEK",
+      "name": "TRESTLE_KEYRING_UNITY_CATALOG_RS__SERVER_KEK",
       "required": true,
-      "minted": true,
-      "help": "Seals the credentials Unity Catalog stores: 32 random bytes, base64. Generate it once and keep it: credentials sealed under one can't be read with another."
+      "help": "The keyring of `unity-catalog-rs`'s key `server-kek`, which the secret server wraps and unwraps its data keys under. Minted and rotated with `trestle key`."
     }
   ],
   "files": [
@@ -1170,6 +1216,22 @@
     {
       "path": "modules/authelia/secrets/jwt_secret",
       "sensitive": true
+    },
+    {
+      "path": "modules/egress-gateway/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/secret-server.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/consumers/unity-catalog-rs.yaml",
+      "sensitive": false
     },
     {
       "path": "modules/envoy/compose.yaml",
@@ -1294,8 +1356,8 @@
       "phase": "configure",
       "module": "unity-catalog-rs",
       "id": "kek",
-      "title": "Set Unity Catalog's key-encryption key",
-      "instructions": "Unity Catalog seals the credentials it stores with a key-encryption key, read from\n`UC_SERVER_KEK` (32 bytes, base64) in the environment of the process that starts the stack.\nCompose passes it through to the server; it is never written into this directory, and without\nit the server refuses to start. Generate one once and keep it: credentials sealed under it\ncan't be read with another.\n\n```sh\nexport UC_SERVER_KEK=\"$(openssl rand -base64 32)\"\n```"
+      "title": "Give Unity Catalog's key a keyring",
+      "instructions": "Unity Catalog seals the credentials it stores through the secret server's key service, under\nthe keyring of its key `server-kek`. The keyring lives in this machine's keychain and reaches\nonly the secret server: the Unity Catalog container gets the socket and the key's name, never a\nkey, and nothing of it is written into this directory. Without a keyring the stack doesn't\nstart.\n\nA new environment gets one with a random first version:\n\n```sh\ntrestle key rotate <ws>/<env> unity-catalog-rs/server-kek\n```\n\nAn environment whose server sealed under `UC_SERVER_KEK` before keeps that key as version 1,\nunder its old id `kek-1`, so what it sealed still opens. `trestle up` imports it once by itself\nwhen `UC_SERVER_KEK` is set (on the environment, its workspace, or in the shell), or:\n\n```sh\ntrestle key import <ws>/<env> unity-catalog-rs/server-kek --from UC_SERVER_KEK --alias kek-1\n```\n\n`trestle key rotate` adds a version while the server runs; `POST /api/admin/v1/encryption/rewrap`\nmoves what is sealed onto it, `GET /api/admin/v1/encryption/kek-usage` shows what is left, and\n`trestle key retire … --below <n> --confirm-swept` stops the old versions opening. The keychain\nholds the only copy of the keyring: without it, nothing sealed under it can be read."
     },
     {
       "order": 3,

@@ -1,0 +1,9 @@
+# In a container: the secret server's key service wraps and unwraps the data keys, under the
+# keyring it alone holds (`trestle key`). The server never sees a key-encryption key, only the
+# socket (`TRESTLE_SDS_SOCKET`) and the key's name (`TRESTLE_KEY_SERVER_KEK`). Values sealed
+# under an imported `UC_SERVER_KEK` open through its alias, `kek-1`.
+encryption:
+  provider:
+    key_service:
+      socket: { env: TRESTLE_SDS_SOCKET }
+      key: { env: TRESTLE_KEY_SERVER_KEK }

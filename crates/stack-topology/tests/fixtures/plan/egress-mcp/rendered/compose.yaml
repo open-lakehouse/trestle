@@ -31,7 +31,9 @@ include:
     project_directory: .
   - path: ./modules/postgres/compose.yaml
     project_directory: .
-  - path: ./modules/unity-catalog-rs/compose.yaml
+  - path:
+      - ./modules/unity-catalog-rs/compose.yaml
+      - ./modules/egress-gateway/consumers/unity-catalog-rs.yaml
     project_directory: .
   - path:
       - ./modules/uc-mcp/compose.yaml
