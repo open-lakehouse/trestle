@@ -3298,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.19"
+version = "0.0.20"
 dependencies = [
  "async-trait",
  "axum",
@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "dirs",
  "futures",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.28"
+version = "0.0.29"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -3410,7 +3410,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.42"
+version = "0.0.43"
 dependencies = [
  "assert_cmd",
  "async-trait",
