@@ -191,6 +191,12 @@ trestle key show demo/dev unity-catalog-rs/server-kek [--json]
   keychain entries.
 - The keychain holds the only copy of each keyring, so back it up. On a team's state
   (`--state`), writes are refused because each machine has its own keychain.
+- `trestle up` checks first that each key the revision seals under has a keyring. A
+  key whose module sealed under a key of its own before (`unity-catalog-rs/server-kek`,
+  from `UC_SERVER_KEK`) is imported from it once, with its alias (`kek-1`), when that
+  variable is set on the environment, its workspace or in the shell. Otherwise `up`
+  starts nothing and prints the `import` and `rotate` commands to run. On a team's
+  state, `up` refuses a revision that seals under a key.
 
 ## Troubleshooting
 

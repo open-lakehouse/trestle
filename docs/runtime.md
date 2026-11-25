@@ -290,6 +290,26 @@ offers on it:
 - `Keyring::summary` shows versions, `active`, `min_decrypt` and aliases, never
   material.
 
+The runtime never writes a keyring, and it fails `start` with `MissingSecrets`
+when one is set nowhere. `trestle up` checks before it creates or starts the
+instance (`ensure_keyrings` in the CLI):
+
+- Each key the revision serves must have a keyring on the environment.
+- A key whose module sealed under a key of its own before names it
+  (`ServedKey::import`, from `Provides::key_imports`). For
+  `unity-catalog-rs/server-kek` that is `UC_SERVER_KEK`, aliased `kek-1`. If
+  the key has no keyring and that variable resolves (the environment's vars, the
+  workspace's, else the shell), `up` imports it as version 1 the way
+  `trestle key import --from` does, logs it, and goes on. It happens once: the
+  keyring exists afterwards, keyrings are add-only, and the variable isn't read
+  again.
+- Otherwise `up` stops before Compose and prints the exact
+  `trestle key import …` (for data sealed before) and `trestle key rotate …`
+  (for a new environment). It never starts a server on a fresh keyring that
+  can't open what it sealed.
+- On a team's state `up` refuses a revision that serves a key, because no
+  keyring can be written there.
+
 **Keyrings are add-only.** No operation removes a version's material. A retired
 version stops unwrapping but keeps its key, so lowering `min_decrypt` again
 recovers a blob the sweep missed. Before a caller stores a keyring in place of
