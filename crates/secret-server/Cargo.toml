@@ -1,7 +1,7 @@
 [package]
 name = "olai-secret-server"
 description = "A secret discovery service (SDS) server that hands generic secrets to Envoy and other consumers over per-consumer Unix sockets, and a key service that wraps their data keys"
-version = "0.0.3"
+version = "0.0.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

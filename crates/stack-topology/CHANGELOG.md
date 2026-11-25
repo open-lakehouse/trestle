@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.28](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.27...olai-stack-topology-v0.0.28) - 2026-11-25
+
+### Added
+
+- let the secret server take its values from a host source (#474)
+- let modules seal under keys the secret server holds (#467)
+
+### Fixed
+
+- pin the secret server image at 0.0.3 (#466)
+
 ## [0.0.27](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.26...olai-stack-topology-v0.0.27) - 2026-11-24
 
 ### Fixed

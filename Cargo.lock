@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "olai-secret-server"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3298,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "async-trait",
  "axum",
@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "dirs",
  "futures",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -3410,7 +3410,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.41"
+version = "0.0.42"
 dependencies = [
  "assert_cmd",
  "async-trait",

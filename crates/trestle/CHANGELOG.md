@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.42](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.41...olai-trestle-v0.0.42) - 2026-11-25
+
+### Added
+
+- register host-source instances with a host secret endpoint (#475)
+- trestle key import|rotate|retire|show for module keyrings (#469)
+
 ## [0.0.40](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.39...olai-trestle-v0.0.40) - 2026-11-22
 
 ### Added
